@@ -1,0 +1,144 @@
+import XCTest
+@testable import VeneraKit
+
+final class MoreFeaturesTests: XCTestCase {
+    private var tempDir: String!
+
+    override func setUp() {
+        super.setUp()
+        tempDir = NSTemporaryDirectory() + "VeneraMoreTests-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+        AppPaths.overrideDataPath = tempDir
+        AppPaths.overrideCachePath = tempDir
+        AppData.shared.load()
+        HistoryManager.shared.ensureSchema()
+        ImageFavoriteManager.shared.ensureSchema()
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(atPath: tempDir)
+        AppPaths.overrideDataPath = nil
+        AppPaths.overrideCachePath = nil
+        super.tearDown()
+    }
+
+    func testComicCollectionStore() {
+        let store = ComicCollectionStore.shared
+
+        let m1 = CollectionMember(sourceKey: "komiic", comicId: "c1", displayName: "Part 1", cachedTitle: "Title 1")
+        let m2 = CollectionMember(sourceKey: "komiic", comicId: "c2", displayName: "Part 2", cachedTitle: "Title 2")
+
+        let col = store.create(name: "My Great Series", members: [m1, m2], displayMode: .tabs)
+        XCTAssertEqual(col.name, "My Great Series")
+        XCTAssertEqual(col.members.count, 2)
+        XCTAssertEqual(col.displayMode, .tabs)
+        XCTAssertTrue(ComicCollectionStore.isCollectionSourceKey(col.sourceKey))
+
+        // Find
+        let found = store.find(id: col.id)
+        XCTAssertNotNil(found)
+        XCTAssertEqual(found?.displayName, "My Great Series")
+
+        let foundByKey = store.findBySourceKey(col.sourceKey)
+        XCTAssertNotNil(foundByKey)
+        XCTAssertEqual(foundByKey?.id, col.id)
+
+        // Add member
+        let m3 = CollectionMember(sourceKey: "komiic", comicId: "c3", displayName: "Part 3")
+        let added = store.addMembers(id: col.id, incoming: [m3])
+        XCTAssertEqual(added, 1)
+        XCTAssertEqual(store.find(id: col.id)?.members.count, 3)
+
+        // Remove member
+        store.removeMember(id: col.id, sourceKey: "komiic", comicId: "c2")
+        XCTAssertEqual(store.find(id: col.id)?.members.count, 2)
+
+        // Remove collection
+        store.remove(id: col.id)
+        XCTAssertNil(store.find(id: col.id))
+    }
+
+    func testImageFavoriteManager() {
+        let manager = ImageFavoriteManager.shared
+        let dummyData = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48] + [UInt8](repeating: 0x00, count: 100))
+
+        XCTAssertFalse(manager.isFavorited(comicId: "comic_fav", sourceKey: "komiic", epIndex: 1, pageIndex: 5))
+
+        manager.addFavorite(
+            comicId: "comic_fav",
+            sourceKey: "komiic",
+            title: "Fav Comic",
+            subtitle: "Artist",
+            epIndex: 1,
+            epTitle: "Chapter 1",
+            pageIndex: 5,
+            imageKey: "https://example.com/p5.jpg",
+            imageData: dummyData
+        )
+
+        XCTAssertTrue(manager.isFavorited(comicId: "comic_fav", sourceKey: "komiic", epIndex: 1, pageIndex: 5))
+        XCTAssertEqual(manager.count, 1)
+
+        let all = manager.getAll()
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.title, "Fav Comic")
+        XCTAssertEqual(all.first?.pageIndex, 5)
+        let persistedPath = all.first?.localFilePath
+        XCTAssertNotNil(persistedPath)
+
+        // Refreshing metadata without image bytes must not discard the offline
+        // copy (INSERT OR REPLACE used to clear local_file here).
+        manager.addFavorite(
+            comicId: "comic_fav",
+            sourceKey: "komiic",
+            title: "Updated title",
+            subtitle: "Artist",
+            epIndex: 1,
+            epTitle: "Chapter 1",
+            pageIndex: 5,
+            imageKey: "https://example.com/p5-updated.jpg"
+        )
+        let refreshed = manager.getAll().first
+        XCTAssertEqual(refreshed?.title, "Updated title")
+        XCTAssertEqual(refreshed?.localFilePath, persistedPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: persistedPath ?? ""))
+
+        manager.removeFavorite(comicId: "comic_fav", sourceKey: "komiic", epIndex: 1, pageIndex: 5)
+        XCTAssertFalse(manager.isFavorited(comicId: "comic_fav", sourceKey: "komiic", epIndex: 1, pageIndex: 5))
+        XCTAssertEqual(manager.count, 0)
+    }
+
+    @MainActor
+    func testReaderCurrentPageFavoriteRoundTrip() async {
+        let comic = Comic(
+            id: "reader-fav",
+            title: "Reader Favorite",
+            cover: "",
+            subtitle: "Author",
+            sourceKey: "local"
+        )
+        let reader = ReaderModel(comic: comic, source: nil, epIndex: 0)
+        reader.pages = [tempDir + "/page.jpg"]
+        try? Data(repeating: 1, count: 128).write(to: URL(fileURLWithPath: reader.pages[0]))
+
+        XCTAssertFalse(reader.isCurrentPageFavorited())
+        let added = await reader.toggleCurrentPageFavorite()
+        XCTAssertEqual(added, true)
+        XCTAssertTrue(reader.isCurrentPageFavorited())
+        let removed = await reader.toggleCurrentPageFavorite()
+        XCTAssertEqual(removed, false)
+        XCTAssertFalse(reader.isCurrentPageFavorited())
+    }
+
+    func testHomeLayoutStore() {
+        let defaults = HomeLayoutStore.loadSections()
+        XCTAssertEqual(defaults.count, HomeLayoutStore.defaultSections.count)
+
+        var modified = defaults
+        modified[0].visible = false
+        HomeLayoutStore.saveSections(modified)
+
+        let reloaded = HomeLayoutStore.loadSections()
+        XCTAssertEqual(reloaded.first?.visible, false)
+    }
+}

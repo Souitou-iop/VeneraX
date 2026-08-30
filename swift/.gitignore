@@ -1,0 +1,11 @@
+# Swift/Xcode build products
+.build/
+build/
+DerivedData/
+xcuserdata/
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Local workspace metadata
+.DS_Store
