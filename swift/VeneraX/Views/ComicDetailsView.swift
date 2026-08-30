@@ -149,6 +149,12 @@ struct ComicDetailsView: View {
                 } header: {
                     HStack {
                         Text("Chapters".tl)
+                        Text("\(chapters.ids.count)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: Capsule())
                         Spacer()
                         Button {
                             isChapterReversed.toggle()
@@ -251,32 +257,48 @@ struct ComicDetailsView: View {
         }
         let entriesInGroup = currentChapters(chapters)
         let displayOrder = isChapterReversed ? Array(entriesInGroup.reversed()) : entriesInGroup
-        ForEach(Array(displayOrder.enumerated()), id: \.offset) { _, entry in
-            let absIdx = absoluteChapterIndex(chapters, entryID: entry.id)
-            let isDownloaded = LocalManager.shared.isDownloaded(id: comic.id, type: comicType, ep: absIdx + 1, chapters: chapters)
-            NavigationLink(value: ReaderTarget(
-                comic: comic,
-                epIndex: absIdx,
-                chapters: chapters
-            )) {
-                HStack {
-                    Text(verbatim: entry.title)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    if isDownloaded {
-                        Image(systemName: "arrow.down.circle.fill")
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 98, maximum: 140), spacing: 6, alignment: .top)],
+            alignment: .leading,
+            spacing: 6
+        ) {
+            ForEach(Array(displayOrder.enumerated()), id: \.offset) { _, entry in
+                let absIdx = absoluteChapterIndex(chapters, entryID: entry.id)
+                let isDownloaded = LocalManager.shared.isDownloaded(id: comic.id, type: comicType, ep: absIdx + 1, chapters: chapters)
+                let isRead = isChapterRead(chapters, entryID: entry.id)
+                NavigationLink(value: ReaderTarget(
+                    comic: comic,
+                    epIndex: absIdx,
+                    chapters: chapters
+                )) {
+                    HStack(spacing: 4) {
+                        Text(verbatim: entry.title)
+                            .font(.footnote.weight(.regular))
+                            .foregroundStyle(isRead ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if isDownloaded || isRead {
+                            HStack(spacing: 2) {
+                                if isDownloaded {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                        .foregroundStyle(.green)
+                                }
+                                if isRead {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
                             .font(.caption2)
-                            .foregroundStyle(.green)
+                        }
                     }
-                    if isChapterRead(chapters, entryID: entry.id) {
-                        Image(systemName: "checkmark")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(.quaternary.opacity(isRead ? 0.2 : 0.45), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
