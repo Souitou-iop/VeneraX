@@ -57,9 +57,9 @@ struct ReaderView: View {
         .persistentSystemOverlays(model.isToolbarHidden ? .hidden : .visible)
         // 阅读器为沉浸式全屏媒体视图（HIG 允许对全屏媒体隐藏 Tab 栏）
         .toolbar(.hidden, for: .tabBar)
-        .toolbar(model.isToolbarHidden ? .hidden : .visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        // The system back button competed with the reader's full-screen tap surface.
+        // Keep navigation chrome hidden and expose one explicit, always-on exit control.
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             await model.loadPages()
             model.recordHistory()
@@ -183,6 +183,9 @@ struct ReaderView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .overlay(alignment: .topLeading) {
+            readerExitButton
+        }
         .contentShape(Rectangle())
         .modifier(ReaderTapZones(
             model: model,
@@ -190,6 +193,28 @@ struct ReaderView: View {
             onTapToolbar: toggleToolbar,
             isEnabled: !isOnChapterCommentsPage
         ))
+    }
+
+    private var readerExitButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .foregroundStyle(Color.primary)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityLabel("Close Reader".tl)
+        .padding(.leading, 16)
+        .padding(.top, 10)
+        .zIndex(2)
     }
 
     private var pageNumberOverlay: some View {

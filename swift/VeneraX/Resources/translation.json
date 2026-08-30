@@ -1520,7 +1520,8 @@
     "下一话": "下一话",
     "已是最后一话": "已是最后一话",
     "已是第一话": "已是第一话",
-    "Cookie fields": "Cookie 字段"
+    "Cookie fields": "Cookie 字段",
+    "Close Reader": "退出阅读器"
   },
   "zh_TW": {
     "Reading Statistics": "阅读统计",
@@ -3043,6 +3044,7 @@
     "下一话": "下一话",
     "已是最后一话": "已是最后一话",
     "已是第一话": "已是第一话",
-    "Cookie fields": "Cookie 欄位"
+    "Cookie fields": "Cookie 欄位",
+    "Close Reader": "退出閱讀器"
   }
 }
