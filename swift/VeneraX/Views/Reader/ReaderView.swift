@@ -173,8 +173,15 @@ struct ReaderView: View {
                 }
             }
         }
-        .overlay(alignment: .bottom) {
-            if !isOnChapterCommentsPage { toolbar }
+        // Reserve space for the controls while keeping the control surface floating.
+        // safeAreaInset prevents the last page/webtoon cell from being hidden behind it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !isOnChapterCommentsPage, !model.isToolbarHidden {
+                toolbar
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .contentShape(Rectangle())
         .modifier(ReaderTapZones(
@@ -204,106 +211,120 @@ struct ReaderView: View {
     }
 
     private var toolbar: some View {
-        Group {
-            if !model.isToolbarHidden {
-                HStack(spacing: 12) {
-                    Button {
-                        showChapters = true
-                    } label: {
-                        Image(systemName: "list.bullet")
-                    }
-                    Slider(
-                        value: Binding(
-                            get: { Double(model.currentIndex) },
-                            set: { value in
-                                let index = Int(value)
-                                if index != model.currentIndex {
-                                    model.setIndex(index)
-                                }
-                            }
-                        ),
-                        in: 0...Double(max(model.totalPages - 1, 0)),
-                        onEditingChanged: { editing in
-                            if !editing {
-                                let index = model.currentIndex
-                                Task { await model.afterIndexChange(index) }
-                            }
-                        }
-                    )
-                    Text(verbatim: "\(model.currentPageNumber)/\(model.totalPages)")
-                        .font(.caption.monospacedDigit())
-                        .frame(minWidth: 52)
-                    if let source = model.source, source.chapterCommentsAvailable,
-                       model.chapterIds.indices.contains(model.currentEpIndex) {
-                        Button {
-                            showChapterComments = true
-                        } label: {
-                            Image(systemName: "bubble.left.and.bubble.right")
-                        }
-                        .accessibilityLabel("Chapter Comments".tl)
-                    }
+        HStack(spacing: 0) {
+            readerToolbarButton("Chapters".tl, systemImage: "list.bullet") {
+                showChapters = true
+            }
 
-                    Button {
-                        isAutoPageTurning.toggle()
-                    } label: {
-                        Image(systemName: isAutoPageTurning ? "timer" : "timer.square")
+            Slider(
+                value: Binding(
+                    get: { Double(model.currentIndex) },
+                    set: { value in
+                        let index = Int(value)
+                        if index != model.currentIndex { model.setIndex(index) }
                     }
-                    .accessibilityLabel((isAutoPageTurning ? "Stop auto page turning" : "Start auto page turning").tl)
-                    .accessibilityHint("Automatically advances pages using the configured interval".tl)
-
-                    Button {
-                        guard !isSavingFavorite else { return }
-                        isSavingFavorite = true
-                        Task {
-                            let result = await model.toggleCurrentPageFavorite()
-                            await MainActor.run {
-                                isSavingFavorite = false
-                                if let result {
-                                    isCurrentPageFavorited = result
-                                    AppServices.shared.showMessage(
-                                        (result ? "Added to image favorites" : "Removed from image favorites").tl
-                                    )
-                                } else {
-                                    AppServices.shared.showMessage("Image is still loading".tl)
-                                }
-                            }
-                        }
-                    } label: {
-                        if isSavingFavorite {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: isCurrentPageFavorited ? "star.fill" : "star")
-                        }
-                    }
-                    .disabled(isSavingFavorite)
-                    .accessibilityLabel((isCurrentPageFavorited ? "Remove image favorite" : "Add image favorite").tl)
-                    Menu {
-                        Picker("Mode".tl, selection: Binding(
-                            get: { model.mode },
-                            set: { model.mode = $0 }
-                        )) {
-                            ForEach(ReaderModel.Mode.allCases, id: \.self) { mode in
-                                Text(verbatim: modeName(mode)).tag(mode)
-                            }
-                        }
-                        Button(model.isNightMode ? "Day Mode".tl : "Night Mode".tl) {
-                            model.isNightMode.toggle()
-                            AppData.shared.settings["readerNightMode"] = .bool(model.isNightMode)
-                        }
-                        Button {
-                            model.retryPage(model.currentIndex)
-                        } label: {
-                            Label("Reload".tl, systemImage: "arrow.clockwise")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                ),
+                in: 0...Double(max(model.totalPages - 1, 0)),
+                onEditingChanged: { editing in
+                    if !editing {
+                        let index = model.currentIndex
+                        Task { await model.afterIndexChange(index) }
                     }
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-                .background(.ultraThinMaterial)
+            )
+            .tint(.accentColor)
+            .frame(minWidth: 90)
+            .padding(.horizontal, 10)
+
+            Text(verbatim: "\(model.currentPageNumber)/\(model.totalPages)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 46)
+                .accessibilityLabel("Page progress".tl)
+
+            if let source = model.source, source.chapterCommentsAvailable,
+               model.chapterIds.indices.contains(model.currentEpIndex) {
+                readerToolbarButton("Chapter Comments".tl, systemImage: "bubble.left.and.bubble.right") {
+                    showChapterComments = true
+                }
             }
+
+            readerToolbarButton(
+                isAutoPageTurning ? "Stop auto page turning".tl : "Start auto page turning".tl,
+                systemImage: isAutoPageTurning ? "timer" : "timer.square"
+            ) {
+                isAutoPageTurning.toggle()
+            }
+
+            Button {
+                guard !isSavingFavorite else { return }
+                isSavingFavorite = true
+                Task {
+                    let result = await model.toggleCurrentPageFavorite()
+                    await MainActor.run {
+                        isSavingFavorite = false
+                        if let result {
+                            isCurrentPageFavorited = result
+                            AppServices.shared.showMessage(
+                                (result ? "Added to image favorites" : "Removed from image favorites").tl
+                            )
+                        } else {
+                            AppServices.shared.showMessage("Image is still loading".tl)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: isCurrentPageFavorited ? "star.fill" : "star")
+                    .frame(minWidth: 36, minHeight: 36)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(isCurrentPageFavorited ? .yellow : .accentColor)
+            .disabled(isSavingFavorite)
+            .accessibilityLabel((isCurrentPageFavorited ? "Remove image favorite" : "Add image favorite").tl)
+
+            Menu {
+                Picker("Mode".tl, selection: Binding(
+                    get: { model.mode },
+                    set: { model.mode = $0 }
+                )) {
+                    ForEach(ReaderModel.Mode.allCases, id: \.self) { mode in
+                        Text(verbatim: modeName(mode)).tag(mode)
+                    }
+                }
+                Button(model.isNightMode ? "Day Mode".tl : "Night Mode".tl) {
+                    model.isNightMode.toggle()
+                    AppData.shared.settings["readerNightMode"] = .bool(model.isNightMode)
+                }
+                Button {
+                    model.retryPage(model.currentIndex)
+                } label: {
+                    Label("Reload".tl, systemImage: "arrow.clockwise")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(minWidth: 36, minHeight: 36)
+            }
+            .menuOrder(.fixed)
+            .accessibilityLabel("Reader options".tl)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .foregroundStyle(Color.accentColor)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: model.isToolbarHidden)
+    }
+
+    private func readerToolbarButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(minWidth: 36, minHeight: 36)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 
     private var chapterDrawer: some View {

@@ -358,7 +358,7 @@ struct SourceSettingsView: View {
                         .disabled(account.isEmpty || password.isEmpty || isBusy)
                     }
                     if !accountConfig.cookieFields.isEmpty {
-                        Text("Cookie fields: \(accountConfig.cookieFields.joined(separator: ", "))")
+                        Text("Cookie fields".tl + ": \(accountConfig.cookieFields.joined(separator: ", "))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
