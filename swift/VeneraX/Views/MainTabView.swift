@@ -75,19 +75,29 @@ struct MainTabView: View {
     /// iPhone 紧凑布局：4 基础 Tab。
     private var phoneTabLayout: some View {
         TabView(selection: $tabSelection) {
-            Tab("Home".tl, systemImage: "house.fill", value: 0) {
-                HomeView()
+            TabSection {
+                Tab("Home".tl, systemImage: "house.fill", value: 0) {
+                    HomeView()
+                }
+                Tab("Favorites".tl, systemImage: "heart.fill", value: 1) {
+                    FavoritesView()
+                }
+                Tab("Explore".tl, systemImage: "globe.asia.australia.fill", value: 2) {
+                    ExploreView()
+                }
+                Tab("Categories".tl, systemImage: "square.grid.2x2.fill", value: 3) {
+                    CategoriesView()
+                }
+            } header: {
+                Label("Browse".tl, systemImage: "circle.hexagonpath")
             }
-            Tab("Favorites".tl, systemImage: "heart.fill", value: 1) {
-                FavoritesView()
-            }
-            Tab("Explore".tl, systemImage: "globe.asia.australia.fill", value: 2) {
-                ExploreView()
-            }
-            Tab("Categories".tl, systemImage: "square.grid.2x2.fill", value: 3) {
-                CategoriesView()
+            Tab("Search".tl, systemImage: "magnifyingglass", value: 4, role: .search) {
+                NavigationStack {
+                    SearchView()
+                }
             }
         }
+        .modifier(SearchTabActivationModifier())
         .toolbarBackground(.visible, for: .tabBar)
     }
 
@@ -289,5 +299,17 @@ private struct JSSelectSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+
+private struct SearchTabActivationModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.tabViewSearchActivation(.searchTabSelection)
+        } else {
+            content
+        }
     }
 }

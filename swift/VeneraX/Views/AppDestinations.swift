@@ -84,11 +84,6 @@ struct BrowseToolbar: ViewModifier {
         content
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: "search") {
-                        Image(systemName: "magnifyingglass")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSources = true
                     } label: {
