@@ -184,7 +184,7 @@ struct FavoritesView: View {
             .navigationDestination(for: LocalFolderTarget.self) { target in
                 LocalFolderView(folder: target.folder)
             }
-            .onAppear(perform: reload)
+            .task { await reload() }
             .onChange(of: networkSourceKey) { _, _ in
                 selectedFolderId = nil
                 Task {
@@ -196,7 +196,7 @@ struct FavoritesView: View {
                 Task { await loadNetwork() }
             }
             .refreshable {
-                reload()
+                await reload()
                 await fetchNetworkFolders()
                 await loadNetwork()
             }
@@ -210,18 +210,33 @@ struct FavoritesView: View {
         return !networkComics.isEmpty
     }
 
-    private func reload() {
-        localComicsCount = LocalManager.shared.count
-        activeDownloadCount = DownloadManager.shared.downloadingTasks.filter { !$0.isPaused && !$0.isError }.count
-        updatedCount = FollowUpdatesManager.shared.totalUpdatedCount
-        folders = LocalFavoritesManager.shared.getFoldersSorted()
+    private func reload() async {
+        let snapshot = await Task.detached(priority: .utility) {
+            FavoritesSnapshot(
+                localComicsCount: LocalManager.shared.count,
+                activeDownloadCount: DownloadManager.shared.downloadingTasks.filter { !$0.isPaused && !$0.isError }.count,
+                updatedCount: FollowUpdatesManager.shared.totalUpdatedCount,
+                folders: LocalFavoritesManager.shared.getFoldersSorted()
+            )
+        }.value
+
+        guard !Task.isCancelled else { return }
+        localComicsCount = snapshot.localComicsCount
+        activeDownloadCount = snapshot.activeDownloadCount
+        updatedCount = snapshot.updatedCount
+        folders = snapshot.folders
         if networkSourceKey == nil {
             networkSourceKey = networkSources.first?.key
-            Task {
-                await fetchNetworkFolders()
-                await loadNetwork()
-            }
+            await fetchNetworkFolders()
+            await loadNetwork()
         }
+    }
+
+    private struct FavoritesSnapshot: Sendable {
+        let localComicsCount: Int
+        let activeDownloadCount: Int
+        let updatedCount: Int
+        let folders: [String]
     }
 
     private func fetchNetworkFolders() async {

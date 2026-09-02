@@ -14,6 +14,7 @@ struct ReaderSettingsSection: View {
             gestureGroup
             favoritesGroup
             imageProcessingGroup
+            imageTranslationGroup
             displayGroup
         }
         .navigationTitle("Reading settings".tl)
@@ -279,6 +280,53 @@ struct ReaderSettingsSection: View {
                 )
             }
         }
+    }
+
+    @ViewBuilder
+    private var imageTranslationGroup: some View {
+        Section("Image translation".tl) {
+                SettingToggleRow(
+                    title: "Translate comic images".tl,
+                    key: "enableImageTranslation",
+                    subtitle: "Recognize text with Apple Vision and show translated overlays in the reader".tl,
+                    defaultValue: false
+                )
+                if AppData.shared.settings["enableImageTranslation"].boolValue ?? false {
+                    SettingPickerRow(
+                        title: "Source language".tl,
+                        key: "imageTranslationSource",
+                        options: [
+                            .init(value: "auto", label: "Auto detect".tl),
+                            .init(value: "ja", label: "Japanese".tl),
+                            .init(value: "zh", label: "Chinese".tl),
+                            .init(value: "en", label: "English".tl),
+                            .init(value: "ko", label: "Korean".tl)
+                        ],
+                        defaultValue: "auto"
+                    )
+                    SettingPickerRow(
+                        title: "Target language".tl,
+                        key: "imageTranslationTarget",
+                        options: [
+                            .init(value: "zh", label: "Simplified Chinese".tl),
+                            .init(value: "zh-TW", label: "Traditional Chinese".tl),
+                            .init(value: "en", label: "English".tl),
+                            .init(value: "ja", label: "Japanese".tl)
+                        ],
+                        defaultValue: "zh"
+                    )
+                    TextField("OpenAI-compatible provider URL".tl, text: SettingsBinding.string("imageTranslationLlmUrl"))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Provider API key (optional)".tl, text: SettingsBinding.string("imageTranslationLlmKey"))
+                    TextField("Provider model (optional)".tl, text: SettingsBinding.string("imageTranslationLlmModel"))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Text("Leave provider URL empty to use the built-in public translation provider. Inpainting is not part of this native MVP; the original image remains visible with translated overlays.".tl)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
     }
 
     // MARK: - 显示组

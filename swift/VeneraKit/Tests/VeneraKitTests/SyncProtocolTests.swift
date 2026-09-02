@@ -66,3 +66,65 @@ final class SyncProtocolTests: XCTestCase {
         XCTAssertEqual(ms.date.timeIntervalSince1970, 1_700_000_000.0, accuracy: 1.5)
     }
 }
+
+extension SyncProtocolTests {
+    func testAliyunVPSBackupShapeSelectsNumericFleetMaximum() {
+        // 脱敏自 /tmp/venerax-webdav-audit.../venerax-backup-metadata.tsv，
+        // 只保留文件名形状，不读取任何远端备份内容。
+        let names: [String?] = [
+            "20687-7524.win.venera",
+            "20688-8231.macos.venera",
+            "20688-8523.ios.venera",
+            "20692-11612.android.venera",
+            "20694-11619.ios.venera",
+            "20697-11620.ios.venera",
+            "20697-11621.ios.venera",
+            "20698-11622.android.venera",
+            "not-a-backup.venera.tmp",
+            "readme.txt",
+            nil,
+        ]
+        XCTAssertEqual(SyncProtocol.maxBackupVersion(names), 11622)
+        XCTAssertEqual(RemoteBackupInfo.fromFileName("20698-11622.android.venera").fileNameForUpload,
+                       "20698-11622.android.venera")
+    }
+
+    func testPendingPublishRequiresMatchingNameAndCompatibleSize() {
+        XCTAssertTrue(SyncProtocol.isOwnPendingPublish(
+            claimedFileName: "20698-11623.ios.venera", claimedSize: 100,
+            remoteFileName: "20698-11623.ios.venera", remoteSize: 100
+        ))
+        XCTAssertTrue(SyncProtocol.isOwnPendingPublish(
+            claimedFileName: "20698-11623.ios.venera", claimedSize: nil,
+            remoteFileName: "20698-11623.ios.venera", remoteSize: 100
+        ))
+        XCTAssertFalse(SyncProtocol.isOwnPendingPublish(
+            claimedFileName: "20698-11623.ios.venera", claimedSize: 100,
+            remoteFileName: "20698-11623.ios.venera", remoteSize: 99
+        ))
+        XCTAssertFalse(SyncProtocol.isOwnPendingPublish(
+            claimedFileName: "20698-11623.ios.venera", claimedSize: 100,
+            remoteFileName: "20698-11624.ios.venera", remoteSize: 100
+        ))
+    }
+
+    func testRetentionIsPerPlatformAndUsesNumericVersions() {
+        let names: [String?] = (1...10).map { "20600-\($0).ios.venera" }
+            + (1...10).map { "20600-\($0).android.venera" }
+            + ["20698-100.ios.venera", "20698-99.android.venera"]
+        let stale = SyncProtocol.backupsBeyondPlatformRetention(
+            fileNames: names,
+            newFileName: "20698-101.ios.venera",
+            keepPerPlatform: 10
+        )
+        XCTAssertEqual(Set(stale), ["20600-1.ios.venera", "20600-2.ios.venera", "20600-1.android.venera"])
+        XCTAssertEqual(SyncProtocol.sanitizedBackupRetention(nil), 10)
+        XCTAssertEqual(SyncProtocol.sanitizedBackupRetention(1), 3)
+        XCTAssertEqual(SyncProtocol.sanitizedBackupRetention(1000), 100)
+    }
+
+    func testSyncLocalComicsIsDevicePolicyInArchiveImport() {
+        XCTAssertTrue(AppData.syncDisabledFields([]).contains("syncLocalComics"))
+        XCTAssertTrue(AppData.syncDisabledFields([]).contains("syncLocalComicImages"))
+    }
+}

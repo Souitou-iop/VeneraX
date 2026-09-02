@@ -142,3 +142,70 @@ final class MoreFeaturesTests: XCTestCase {
         XCTAssertEqual(reloaded.first?.visible, false)
     }
 }
+
+extension MoreFeaturesTests {
+    func testReaderGallerySpreadsKeepCoverAlone() {
+        let spreads = ReaderModel.gallerySpreads(
+            pageCount: 5,
+            pagesPerSpread: 2,
+            showSingleImageOnFirstPage: true
+        )
+        XCTAssertEqual(spreads.map(\.pageIndices), [[0], [1, 2], [3, 4]])
+        XCTAssertEqual(
+            ReaderModel.gallerySpreadIndex(
+                forImageIndex: 4,
+                pageCount: 5,
+                pagesPerSpread: 2,
+                showSingleImageOnFirstPage: true
+            ),
+            2
+        )
+    }
+
+    func testReaderGallerySpreadsPairFromFirstPageWhenCoverModeDisabled() {
+        let spreads = ReaderModel.gallerySpreads(
+            pageCount: 5,
+            pagesPerSpread: 2,
+            showSingleImageOnFirstPage: false
+        )
+        XCTAssertEqual(spreads.map(\.pageIndices), [[0, 1], [2, 3], [4]])
+        XCTAssertEqual(
+            ReaderModel.gallerySpreadIndex(
+                forImageIndex: 3,
+                pageCount: 5,
+                pagesPerSpread: 2,
+                showSingleImageOnFirstPage: false
+            ),
+            1
+        )
+    }
+}
+
+extension MoreFeaturesTests {
+    func testContinuousItemsKeepStableChapterAndPageIDs() {
+        let items = ReaderModel.continuousItems(
+            for: 7,
+            pageList: ["p1", "p2"],
+            chapterTitle: "Chapter 8"
+        )
+        XCTAssertEqual(items.map(\.id), ["7_0_true", "7_0_false", "7_1_false"])
+        XCTAssertTrue(items[0].isChapterHeader)
+        XCTAssertEqual(items[1].pageIndex, 0)
+        XCTAssertEqual(items[2].pageIndex, 1)
+    }
+
+    func testContinuousPrefetchOnlyNearLoadedWindowBoundaries() {
+        XCTAssertTrue(ReaderModel.shouldPrefetchPreviousContinuousChapter(itemOffset: 0, itemCount: 20))
+        XCTAssertTrue(ReaderModel.shouldPrefetchPreviousContinuousChapter(itemOffset: 3, itemCount: 20))
+        XCTAssertFalse(ReaderModel.shouldPrefetchPreviousContinuousChapter(itemOffset: 4, itemCount: 20))
+        XCTAssertFalse(ReaderModel.shouldPrefetchNextContinuousChapter(itemOffset: 10, itemCount: 20))
+        XCTAssertTrue(ReaderModel.shouldPrefetchNextContinuousChapter(itemOffset: 16, itemCount: 20))
+        XCTAssertTrue(ReaderModel.shouldPrefetchNextContinuousChapter(itemOffset: 19, itemCount: 20))
+    }
+
+    func testContinuousPrefetchRejectsInvalidOffsets() {
+        XCTAssertFalse(ReaderModel.shouldPrefetchPreviousContinuousChapter(itemOffset: -1, itemCount: 10))
+        XCTAssertFalse(ReaderModel.shouldPrefetchNextContinuousChapter(itemOffset: 10, itemCount: 10))
+        XCTAssertFalse(ReaderModel.shouldPrefetchNextContinuousChapter(itemOffset: 0, itemCount: 0))
+    }
+}

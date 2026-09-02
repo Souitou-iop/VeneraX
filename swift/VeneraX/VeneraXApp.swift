@@ -38,7 +38,6 @@ struct RootView: View {
                 ProgressView()
                     .task {
                         await appState.initialize()
-                        await services.boot()
                     }
             case .main:
                 if appState.needsMigration {
@@ -51,6 +50,12 @@ struct RootView: View {
                         .modifier(ReaderAutoLaunchModifier())
                         .task(id: appState.pendingExternalURL) {
                             await handleExternalURL()
+                        }
+                        .task {
+                            // Only boot runtime-backed services for the actual app UI.
+                            // Migration and lock screens must not start the heavy JS path.
+                            await Task.yield()
+                            await services.boot()
                         }
                 }
             }

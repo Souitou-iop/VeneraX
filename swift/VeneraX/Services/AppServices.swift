@@ -12,6 +12,7 @@ final class AppServices {
     private(set) var sources: [ComicSource] = []
     var bootError: String?
     private(set) var isBooted = false
+    private var isBooting = false
 
     /// 源脚本触发的 UI 消息（Toast/对话框）。
     private(set) var toast: String?
@@ -53,9 +54,10 @@ final class AppServices {
     private init() {}
 
     func boot() async {
-        guard !isBooted else { return }
-        AppData.shared.load()
-
+        guard !isBooted, !isBooting else { return }
+        isBooting = true
+        defer { isBooting = false }
+        let startedAt = Date()
         dispatcher.storageDelegate = ComicSourceManager.shared
         dispatcher.uiDelegate = self
         dispatcher.install(to: runtime)
@@ -78,6 +80,7 @@ final class AppServices {
             }
         }
         isBooted = true
+        Log.info("Startup", "Runtime services ready in \(Int(Date().timeIntervalSince(startedAt) * 1000)) ms")
 
         runStartupMaintenance()
 
@@ -92,7 +95,11 @@ final class AppServices {
     private func runStartupMaintenance() {
         let rawDays = AppData.shared.settings["autoCleanHistoryDays"].stringValue ?? "0"
         let days = Int(rawDays) ?? 0
-        HistoryManager.shared.cleanHistoryOlderThan(days: days)
+        guard days > 0 else { return }
+        Task.detached(priority: .utility) {
+            HistoryManager.shared.cleanHistoryOlderThan(days: days)
+            Log.info("Startup", "History maintenance completed")
+        }
     }
 
     private func refreshSources() {

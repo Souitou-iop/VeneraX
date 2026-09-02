@@ -59,13 +59,35 @@ struct SettingPickerRow: View {
     let options: [SettingOption]
     var defaultValue: String?
     var help: String?
+    @State private var selection: String
+
+    init(
+        title: String,
+        key: String,
+        options: [SettingOption],
+        defaultValue: String? = nil,
+        help: String? = nil
+    ) {
+        self.title = title
+        self.key = key
+        self.options = options
+        self.defaultValue = defaultValue
+        self.help = help
+        _selection = State(initialValue: AppData.shared.settings[key].stringValue ?? defaultValue ?? options.first?.value ?? "")
+    }
 
     var body: some View {
-        let binding = SettingsBinding.string(key, default: defaultValue ?? options.first?.value ?? "")
-        Picker(title, selection: binding) {
+        Picker(title, selection: $selection) {
             ForEach(options) { option in
                 Text(verbatim: option.label).tag(option.value)
             }
+        }
+        .onChange(of: selection) { _, newValue in
+            AppData.shared.settings[key] = .string(newValue)
+            AppData.shared.saveData()
+        }
+        .onAppear {
+            selection = AppData.shared.settings[key].stringValue ?? defaultValue ?? options.first?.value ?? ""
         }
         if let help {
             Text(verbatim: help)

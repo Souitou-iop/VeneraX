@@ -10,6 +10,8 @@ struct TasksView: View {
     @State private var sourceUpdateTasks: [SourceUpdateTask] = []
     @State private var downloadTasks: [DownloadTask] = []
     @State private var dataSyncTasks: [DataSyncTask] = []
+    @State private var comicExportTasks: [LocalComicExportTask] = []
+    @State private var comicExportPendingCancellation: LocalComicExportTask?
     @State private var showMigrationSheet = false
     @State private var showClearHistoryConfirmation = false
     @State private var removeDownloadObserver: (() -> Void)?
@@ -17,6 +19,7 @@ struct TasksView: View {
     @State private var removeFollowObserver: (() -> Void)?
     @State private var removeSourceUpdateObserver: (() -> Void)?
     @State private var removeDataSyncObserver: (() -> Void)?
+    @State private var removeComicExportObserver: (() -> Void)?
     @State private var taskPendingCancellation: SourceMigrationManager.MigrationTask?
     @State private var followPendingCancellation: FollowUpdateTask?
     @State private var sourceUpdatePendingCancellation: SourceUpdateTask?
@@ -90,6 +93,11 @@ struct TasksView: View {
                     Task { @MainActor in reload() }
                 }
             }
+            if removeComicExportObserver == nil {
+                removeComicExportObserver = LocalComicExportManager.shared.onChange.add { _ in
+                    Task { @MainActor in reload() }
+                }
+            }
         }
         .onDisappear {
             removeDownloadObserver?()
@@ -102,6 +110,8 @@ struct TasksView: View {
             removeSourceUpdateObserver = nil
             removeDataSyncObserver?()
             removeDataSyncObserver = nil
+            removeComicExportObserver?()
+            removeComicExportObserver = nil
         }
         .confirmationDialog("Clear Task History?".tl, isPresented: $showClearHistoryConfirmation, titleVisibility: .visible) {
             Button("Clear History".tl, role: .destructive) {
@@ -109,6 +119,7 @@ struct TasksView: View {
                 FollowUpdatesManager.shared.clearHistory()
                 SourceUpdateManager.shared.clearHistory()
                 DataSyncManager.shared.clearHistory()
+                LocalComicExportManager.shared.clearHistory()
                 reload()
             }
             Button("Cancel".tl, role: .cancel) {}
@@ -160,6 +171,10 @@ struct TasksView: View {
         } message: { _ in
             Text("Source updates will stop and keep their task history.".tl)
         }
+.alert("Cancel Comic Export?".tl, isPresented: Binding(get: { comicExportPendingCancellation != nil }, set: { if !$0 { comicExportPendingCancellation = nil } }), presenting: comicExportPendingCancellation) { task in
+            Button("Cancel Task".tl, role: .destructive) { LocalComicExportManager.shared.cancel(id: task.id); comicExportPendingCancellation = nil; reload() }
+            Button("Keep Running".tl, role: .cancel) { comicExportPendingCancellation = nil }
+        } message: { _ in Text("The export will stop and remove incomplete files.".tl) }
         .alert("Cancel Data Sync?".tl, isPresented: Binding(
             get: { dataSyncPendingCancellation != nil },
             set: { if !$0 { dataSyncPendingCancellation = nil } }
@@ -178,7 +193,7 @@ struct TasksView: View {
     }
 
     private var hasHistory: Bool {
-        !finishedTasks.isEmpty || !finishedFollowTasks.isEmpty || !finishedSourceUpdateTasks.isEmpty || !finishedDataSyncTasks.isEmpty
+        !finishedTasks.isEmpty || !finishedFollowTasks.isEmpty || !finishedSourceUpdateTasks.isEmpty || !finishedDataSyncTasks.isEmpty || !finishedComicExportTasks.isEmpty
     }
 
     private var runningTasks: [SourceMigrationManager.MigrationTask] {
@@ -213,9 +228,12 @@ struct TasksView: View {
         dataSyncTasks.filter { $0.status != .running }
     }
 
+    private var runningComicExportTasks: [LocalComicExportTask] { comicExportTasks.filter(\.isRunning) }
+    private var finishedComicExportTasks: [LocalComicExportTask] { comicExportTasks.filter { !$0.isRunning } }
+
     private var runningList: some View {
         Group {
-            if runningTasks.isEmpty && runningFollowTasks.isEmpty && runningSourceUpdateTasks.isEmpty && runningDataSyncTasks.isEmpty && downloadTasks.isEmpty {
+            if runningTasks.isEmpty && runningFollowTasks.isEmpty && runningSourceUpdateTasks.isEmpty && runningDataSyncTasks.isEmpty && runningComicExportTasks.isEmpty && downloadTasks.isEmpty {
                 ContentUnavailableView {
                     Label("No Running Tasks".tl, systemImage: "checkmark.circle")
                 } description: {
@@ -259,6 +277,11 @@ struct TasksView: View {
                             }
                         }
                     }
+                    if !runningComicExportTasks.isEmpty {
+                        Section("Comic Export".tl) {
+                            ForEach(runningComicExportTasks) { task in comicExportTaskCard(task) }
+                        }
+                    }
                 }
             }
         }
@@ -266,7 +289,7 @@ struct TasksView: View {
 
     private var historyList: some View {
         Group {
-            if finishedTasks.isEmpty && finishedFollowTasks.isEmpty && finishedSourceUpdateTasks.isEmpty && finishedDataSyncTasks.isEmpty {
+            if finishedTasks.isEmpty && finishedFollowTasks.isEmpty && finishedSourceUpdateTasks.isEmpty && finishedDataSyncTasks.isEmpty && finishedComicExportTasks.isEmpty {
                 ContentUnavailableView {
                     Label("No Task History".tl, systemImage: "clock")
                 } description: {
@@ -286,6 +309,7 @@ struct TasksView: View {
                     ForEach(finishedDataSyncTasks) { task in
                         dataSyncTaskCard(task)
                     }
+                    ForEach(finishedComicExportTasks) { task in comicExportTaskCard(task) }
                 }
             }
         }
@@ -478,6 +502,7 @@ struct TasksView: View {
         case .download: return "WebDAV Download".tl
         case .import: return "Import App Data".tl
         case .export: return "Export App Data".tl
+        case .webdavMigration: return "WebDAV Library Migration".tl
         }
     }
 
@@ -487,6 +512,7 @@ struct TasksView: View {
         case .download: return "arrow.down.circle"
         case .import: return "archivebox"
         case .export: return "arrow.up.doc"
+        case .webdavMigration: return "externaldrive.badge.person.crop"
         }
     }
 
@@ -500,12 +526,29 @@ struct TasksView: View {
                 Spacer()
                 dataSyncStatusBadge(task.status)
             }
-            Text(verbatim: task.fileName ?? task.backupName ?? task.phase)
+            Text(verbatim: task.libraryName ?? task.fileName ?? task.backupName ?? task.phase)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             ProgressView(value: task.progress)
                 .tint(.accentColor)
+            if let currentItem = task.currentItem, !currentItem.isEmpty {
+                Text(verbatim: currentItem)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            if task.failureCount > 0 {
+                Text("Failures: \(task.failureCount)".tl)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                ForEach(task.failures.prefix(2), id: \.self) { failure in
+                    Text(verbatim: failure)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                }
+            }
             if let error = task.error {
                 Text(verbatim: error)
                     .font(.caption2)
@@ -520,6 +563,21 @@ struct TasksView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func comicExportTaskCard(_ task: LocalComicExportTask) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack { Label("Comic Export".tl, systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold)); Spacer(); Text(task.status.rawValue.capitalized).font(.caption2).foregroundStyle(task.status == .failed ? .red : .secondary) }
+            Text("\(task.format.displayName) · \(task.currentIndex)/\(task.comicTitles.count)".tl).font(.caption).foregroundStyle(.secondary)
+            if !task.outputRelativePaths.isEmpty {
+                Label("Files → On My iPhone → VeneraX → Exports".tl, systemImage: "folder").font(.caption2).foregroundStyle(.secondary)
+                Text(task.outputRelativePaths.joined(separator: ", ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+            }
+            ProgressView(value: task.progress)
+            if let error = task.error { Text(verbatim: error).font(.caption2).foregroundStyle(.red).lineLimit(2) }
+            if task.status == .running { Button("Cancel".tl, role: .destructive) { comicExportPendingCancellation = task }.font(.caption) }
+        }.padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -544,6 +602,7 @@ struct TasksView: View {
         followTasks = FollowUpdatesManager.shared.allTasks()
         sourceUpdateTasks = SourceUpdateManager.shared.allTasks()
         dataSyncTasks = DataSyncManager.shared.allTasks()
+        comicExportTasks = LocalComicExportManager.shared.allTasks()
         downloadTasks = DownloadManager.shared.downloadingTasks
     }
 }

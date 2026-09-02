@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 import VeneraKit
 
 /// 本地漫画管理页（对齐原版 local_comics_page.dart）。
-/// 支持 4 档状态过滤、搜索、排序、CBZ/ZIP/.venera_comics/目录导入、
-/// CBZ/.venera_comics 导出与多选批量删除。
+/// 支持 4 档状态过滤、搜索、排序、CBZ/ZIP/.venera_comics/目录导入，
+/// 单本导出，以及通过任务中心执行 PDF/EPUB/CBZ/.venera_comics 多选批量导出。
 struct LocalComicsView: View {
     @State private var comics: [LocalComic] = []
     @State private var selectedStatus: LocalComicStatus? = nil
@@ -12,11 +12,16 @@ struct LocalComicsView: View {
     @State private var searchKeyword: String = ""
     @State private var showArchiveImporter = false
     @State private var showFolderImporter = false
-    @State private var exportShareURL: URL?
+    @State private var exportShareURLs: [URL] = []
     @State private var showShareSheet = false
+    @State private var selectedComicIDs: Set<String> = []
+    @State private var editMode: EditMode = .inactive
+    @State private var showExportFormatDialog = false
+    @State private var showMergeVeneraDialog = false
     @State private var isImporting = false
     @State private var importMessage: String?
     @State private var activeDownloadCount = 0
+    @State private var exportObserver: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,7 +52,7 @@ struct LocalComicsView: View {
                     Text("Tap + to import CBZ, ZIP, or folders".tl)
                 }
             } else {
-                List {
+                List(selection: $selectedComicIDs) {
                     ForEach(filteredComics) { comic in
                         LocalComicRow(comic: comic)
                             .swipeActions(edge: .trailing) {
@@ -58,14 +63,14 @@ struct LocalComicsView: View {
                                 }
 
                                 Button {
-                                    exportComic(comic)
+                                    startBatchExport(.cbz, comics: [comic])
                                 } label: {
                                     Label("Export CBZ".tl, systemImage: "square.and.arrow.up")
                                 }
                                 .tint(.blue)
 
                                 Button {
-                                    exportVeneraComics(comic)
+                                    startBatchExport(.veneraComics, comics: [comic])
                                 } label: {
                                     Label("Export .venera_comics".tl, systemImage: "archivebox")
                                 }
@@ -78,8 +83,19 @@ struct LocalComicsView: View {
         }
         .navigationTitle("Local Comics".tl)
         .navigationBarTitleDisplayMode(.inline)
+        .environment(\.editMode, $editMode)
         .searchable(text: $searchKeyword, prompt: "Search local comics".tl)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                EditButton()
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if !selectedComicIDs.isEmpty {
+                    Button { showExportFormatDialog = true } label: {
+                        Label("Export Selected (\(selectedComicIDs.count))".tl, systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink(value: "downloading") {
                     ZStack(alignment: .topTrailing) {
@@ -140,12 +156,33 @@ struct LocalComicsView: View {
         ) { result in
             handleFolderImport(result)
         }
-        .sheet(isPresented: $showShareSheet) {
-            if let exportShareURL {
-                ShareSheet(items: [exportShareURL])
+        .sheet(isPresented: $showShareSheet, onDismiss: {
+            exportShareURLs = []
+        }) {
+            ShareSheet(items: exportShareURLs)
+        }
+        .confirmationDialog("Export Format".tl, isPresented: $showExportFormatDialog, titleVisibility: .visible) {
+            ForEach(LocalComicExportFormat.allCases, id: \.self) { format in
+                Button(format.displayName) {
+                    if format == .veneraComics { showMergeVeneraDialog = true } else { startBatchExport(format) }
+                }
+            }
+            Button("Cancel".tl, role: .cancel) {}
+        }
+        .confirmationDialog("Merge .venera_comics".tl, isPresented: $showMergeVeneraDialog, titleVisibility: .visible) {
+            Button("Export separately".tl) { startBatchExport(.veneraComics, mergeVeneraComics: false) }
+            Button("Merge into one file".tl) { startBatchExport(.veneraComics, mergeVeneraComics: true) }
+            Button("Cancel".tl, role: .cancel) {}
+        }
+        .onAppear {
+            reload()
+            if exportObserver == nil {
+                exportObserver = LocalComicExportManager.shared.onChange.add { _ in
+                    Task { @MainActor in handleExportUpdates() }
+                }
             }
         }
-        .onAppear(perform: reload)
+        .onDisappear { exportObserver?(); exportObserver = nil }
         .onChange(of: sortType) { _, _ in reload() }
     }
 
@@ -175,39 +212,21 @@ struct LocalComicsView: View {
         reload()
     }
 
-    private func exportComic(_ comic: LocalComic) {
-        Task {
-            let safeTitle = LocalManager.sanitizeFileName(comic.title)
-            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("\(safeTitle).cbz")
-            do {
-                try LocalComicImporter.exportToCBZ(comic: comic, destinationURL: tempURL)
-                await MainActor.run {
-                    self.exportShareURL = tempURL
-                    self.showShareSheet = true
-                }
-            } catch {
-                Log.error("Export", "Failed to export CBZ: \(error)")
-            }
-        }
+    private func startBatchExport(_ format: LocalComicExportFormat, comics explicitComics: [LocalComic]? = nil, mergeVeneraComics: Bool = false) {
+        let selected = explicitComics ?? filteredComics.filter { selectedComicIDs.contains($0.id) }
+        guard LocalComicExportManager.shared.start(comics: selected, format: format, mergeVeneraComics: mergeVeneraComics) != nil else { return }
+        selectedComicIDs.removeAll()
+        editMode = .inactive
     }
 
-    private func exportVeneraComics(_ comic: LocalComic) {
-        Task {
-            let safeTitle = LocalManager.sanitizeFileName(comic.title)
-            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("\(safeTitle).venera_comics")
-            do {
-                _ = try LocalComicImporter.exportVeneraComics(
-                    comics: [comic],
-                    destinationURL: tempURL
-                )
-                await MainActor.run {
-                    self.exportShareURL = tempURL
-                    self.showShareSheet = true
-                }
-            } catch {
-                Log.error("Export", "Failed to export .venera_comics: \(error)")
+    private func handleExportUpdates() {
+        guard !showShareSheet else { return }
+        for task in LocalComicExportManager.shared.allTasks() where task.status == .completed {
+            let urls = LocalComicExportManager.shared.takeCompletedURLs(for: task.id)
+            if !urls.isEmpty {
+                exportShareURLs = urls
+                showShareSheet = true
+                break
             }
         }
     }

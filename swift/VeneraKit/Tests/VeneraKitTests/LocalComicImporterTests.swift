@@ -142,3 +142,77 @@ final class LocalComicImporterTests: XCTestCase {
     }
 
 }
+
+extension LocalComicImporterTests {
+    func testPDFAndEPUBExportProduceReadableFiles() throws {
+        let source = URL(fileURLWithPath: AppPaths.join(tempDir, "format_comic"))
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
+        try png.write(to: source.appendingPathComponent("cover.png"))
+        try png.write(to: source.appendingPathComponent("1.png"))
+        try png.write(to: source.appendingPathComponent("2.png"))
+        let comic = try XCTUnwrap(LocalComicImporter.scanAndImportDirectory(source).first)
+
+        let pdf = URL(fileURLWithPath: AppPaths.join(tempDir, "comic.pdf"))
+        try LocalComicImporter.exportPDF(comic: comic, destinationURL: pdf)
+        let pdfData = try Data(contentsOf: pdf)
+        XCTAssertGreaterThan(pdfData.count, 100)
+        XCTAssertTrue(String(data: pdfData.prefix(8), encoding: .ascii)?.hasPrefix("%PDF-1.") == true)
+
+        let epub = URL(fileURLWithPath: AppPaths.join(tempDir, "comic.epub"))
+        try LocalComicImporter.exportEPUB(comic: comic, destinationURL: epub)
+        guard let archive = Archive(url: epub, accessMode: .read, preferredEncoding: .utf8) else {
+            return XCTFail("EPUB is not a readable ZIP archive")
+        }
+        let names = archive.map(\.path)
+        XCTAssertEqual(names.first, "mimetype")
+        XCTAssertTrue(names.contains("META-INF/container.xml"))
+        XCTAssertTrue(names.contains("OEBPS/content.opf"))
+        XCTAssertTrue(names.contains("OEBPS/images/image-1.png"))
+    }
+
+    func testExportFormatRejectsComicWithoutImages() throws {
+        let comic = LocalComic(id: "empty", title: "Empty", subtitle: "", tags: [], directory: "missing", chapters: nil, cover: "", comicType: ComicID.local, downloadedChapters: [])
+        XCTAssertThrowsError(try LocalComicImporter.exportPDF(comic: comic, destinationURL: URL(fileURLWithPath: AppPaths.join(tempDir, "empty.pdf")))) { error in
+            XCTAssertEqual(error as? LocalComicExportError, .noImages("Empty"))
+        }
+    }
+}
+
+extension LocalComicImporterTests {
+    func testExportManagerPersistsMergedOutputInVisibleExportsDirectory() async throws {
+        let source = URL(fileURLWithPath: AppPaths.join(tempDir, "manager_comic"))
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
+        try png.write(to: source.appendingPathComponent("cover.png"))
+        try png.write(to: source.appendingPathComponent("1.png"))
+        let comic = try XCTUnwrap(LocalComicImporter.scanAndImportDirectory(source).first)
+        var second = comic
+        second.id = "manager-comic-2"
+        second.title = "Second Comic"
+
+        let outputRoot = URL(fileURLWithPath: AppPaths.join(tempDir, "Documents", "Exports"), isDirectory: true)
+        LocalComicExportManager.overrideExportDirectoryURL = outputRoot
+        defer {
+            LocalComicExportManager.overrideExportDirectoryURL = nil
+            LocalComicExportManager.shared.clearHistory()
+        }
+
+        let task = try XCTUnwrap(LocalComicExportManager.shared.start(comics: [comic, second], format: .veneraComics, mergeVeneraComics: true))
+        var finished = task
+        for _ in 0..<100 {
+            if let current = LocalComicExportManager.shared.allTasks().first(where: { $0.id == task.id }) {
+                finished = current
+                if !current.isRunning { break }
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertEqual(finished.status, .completed)
+        XCTAssertEqual(finished.outputRelativePaths.count, 1)
+        XCTAssertEqual(finished.outputCount, 1)
+        let output = try XCTUnwrap(LocalComicExportManager.shared.outputURLs(for: finished).first)
+        XCTAssertEqual(output.deletingLastPathComponent().standardizedFileURL, outputRoot.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.path))
+    }
+}

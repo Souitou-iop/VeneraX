@@ -135,13 +135,19 @@ actor CoverLoader {
         return result
     }
 
+    private static func decode(_ data: Data) async -> UIImage? {
+        await Task.detached(priority: .utility) {
+            UIImage(data: data)
+        }.value
+    }
+
     private func fetch(_ urlString: String, sourceKey: String?, comicID: String?, cacheKey: String) async -> UIImage? {
         if urlString.hasPrefix("file://") {
             let path = String(urlString.dropFirst("file://".count))
             let data = await Task.detached(priority: .utility) {
                 try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)
             }.value
-            guard let data, let image = UIImage(data: data) else { return nil }
+            guard let data, let image = await Self.decode(data) else { return nil }
             memory.setObject(image, forKey: cacheKey as NSString, cost: data.count)
             return image
         }
@@ -157,13 +163,13 @@ actor CoverLoader {
                     eid: "",
                     source: source
                   ),
-                  let image = UIImage(data: data), !Task.isCancelled else { return nil }
+                  let image = await Self.decode(data), !Task.isCancelled else { return nil }
             memory.setObject(image, forKey: cacheKey as NSString, cost: data.count)
             return image
         }
 
         guard URL(string: urlString) != nil else { return nil }
-        if let data = CacheManager.shared.getData(cacheKey), let image = UIImage(data: data) {
+        if let data = CacheManager.shared.getData(cacheKey), let image = await Self.decode(data) {
             memory.setObject(image, forKey: cacheKey as NSString, cost: data.count)
             return image
         }
@@ -174,7 +180,7 @@ actor CoverLoader {
             ignoreBadCertificate: AppData.shared.settings["ignoreBadCertificate"].boolValue ?? false
         )
         guard let status = response.status, (200..<300).contains(status), !response.body.isEmpty,
-              let image = UIImage(data: response.body), !Task.isCancelled else { return nil }
+              let image = await Self.decode(response.body), !Task.isCancelled else { return nil }
         CacheManager.shared.set(cacheKey, response.body)
         memory.setObject(image, forKey: cacheKey as NSString, cost: response.body.count)
         return image

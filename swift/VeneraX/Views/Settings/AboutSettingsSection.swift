@@ -1,11 +1,63 @@
 import SwiftUI
 import VeneraKit
 
+struct AppUpdateCheckResult: Sendable {
+    let tag: String
+    let hasUpdate: Bool
+}
+
+/// Shares an in-flight release request so startup and manual checks cannot race.
+actor AppUpdateChecker {
+    static let shared = AppUpdateChecker()
+
+    private var inFlight: Task<AppUpdateCheckResult, Error>?
+
+    func check(forceRefresh: Bool = false) async throws -> AppUpdateCheckResult {
+        if !forceRefresh, let inFlight {
+            return try await inFlight.value
+        }
+        if let inFlight {
+            return try await inFlight.value
+        }
+
+        let task = Task {
+            try await Self.fetchLatestRelease()
+        }
+        inFlight = task
+        defer { inFlight = nil }
+        return try await task.value
+    }
+
+    private static func fetchLatestRelease() async throws -> AppUpdateCheckResult {
+        guard let url = URL(string: "https://api.github.com/repos/\(AboutSettingsSection.repoOwner)/\(AboutSettingsSection.repoName)/releases/latest") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let tag = json?["tag_name"] as? String, !tag.isEmpty else {
+            throw URLError(.cannotParseResponse)
+        }
+        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let remote = AboutSettingsSection.normalizeVersion(tag)
+        return AppUpdateCheckResult(
+            tag: tag,
+            hasUpdate: AboutSettingsSection.compareVersion(remote, current) > 0
+        )
+    }
+}
+
 /// 「About」分区（对齐 settings/about.dart：版本/更新检查/仓库/免责声明；
 /// 应用内指南随 M5 迁移）。
 struct AboutSettingsSection: View {
-    static let repoOwner = "Kyosee"
-    static let repoName = "VeneraX"
+    @Environment(AppState.self) private var appState
+    nonisolated static let repoOwner = "Kyosee"
+    nonisolated static let repoName = "VeneraX"
 
     @State private var isCheckingUpdate = false
     @State private var updateMessage: String?
@@ -37,7 +89,9 @@ struct AboutSettingsSection: View {
             Section {
                 SettingActionRow(
                     title: "Check for updates".tl,
-                    subtitle: updateMessage,
+                    subtitle: updateMessage ?? appState.startupUpdateTag.map {
+                        "New version available".tl + ": \($0)"
+                    },
                     actionTitle: isCheckingUpdate ? "…" : "Check".tl
                 ) {
                     checkUpdate()
@@ -94,34 +148,20 @@ struct AboutSettingsSection: View {
         updateMessage = nil
         Task {
             do {
-                guard let url = URL(string: "https://api.github.com/repos/\(Self.repoOwner)/\(Self.repoName)/releases/latest") else { return }
-                var request = URLRequest(url: url)
-                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-                let (data, _) = try await URLSession.shared.data(for: request)
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                guard let tag = json?["tag_name"] as? String else {
-                    throw JSRuntimeException(message: "Invalid release response".tl)
-                }
-                let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-                let remote = Self.normalizeVersion(tag)
-                let hasUpdate = Self.compareVersion(remote, current) > 0
-                await MainActor.run {
-                    isCheckingUpdate = false
-                    updateMessage = hasUpdate
-                        ? "New version available".tl + ": \(tag)"
-                        : "No updates".tl
-                }
+                let result = try await AppUpdateChecker.shared.check(forceRefresh: true)
+                isCheckingUpdate = false
+                updateMessage = result.hasUpdate
+                    ? "New version available".tl + ": \(result.tag)"
+                    : "No updates".tl
             } catch {
-                await MainActor.run {
-                    isCheckingUpdate = false
-                    updateMessage = error.localizedDescription
-                }
+                isCheckingUpdate = false
+                updateMessage = error.localizedDescription
             }
         }
     }
 
     /// tag → 版本号（去 v 前缀与预发布后缀）。
-    static func normalizeVersion(_ tag: String) -> String {
+    nonisolated static func normalizeVersion(_ tag: String) -> String {
         var text = tag
         if text.hasPrefix("v") || text.hasPrefix("V") {
             text.removeFirst()
@@ -133,7 +173,7 @@ struct AboutSettingsSection: View {
     }
 
     /// 逐段数值比较；段数不足补 0。返回 >0 表示 a 更新。
-    static func compareVersion(_ a: String, _ b: String) -> Int {
+    nonisolated static func compareVersion(_ a: String, _ b: String) -> Int {
         let aParts = a.split(separator: ".").map { Int($0) ?? 0 }
         let bParts = b.split(separator: ".").map { Int($0) ?? 0 }
         for index in 0..<max(aParts.count, bParts.count) {

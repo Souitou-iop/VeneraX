@@ -1,6 +1,50 @@
 import Foundation
 import ZIPFoundation
 
+/// A single immediate WebDAV child returned by PROPFIND.
+public struct WebDAVResource: Sendable, Equatable {
+    public let name: String
+    public let href: String
+    public let isCollection: Bool
+
+    public init(name: String, href: String, isCollection: Bool) {
+        self.name = name
+        self.href = href
+        self.isCollection = isCollection
+    }
+}
+
+/// URL/path rules shared by WebDAV browsing and migration.
+public enum WebDAVPath {
+    /// Joins raw path components without allowing a child to escape the
+    /// configured WebDAV base URL. Leading slashes are intentionally ignored:
+    /// `/venerax/` is a path inside `https://host/webdav/`, not a host root.
+    public static func join(_ parts: String...) -> String {
+        join(parts)
+    }
+
+    public static func join(_ parts: [String]) -> String {
+        parts
+            .flatMap { $0.split(separator: "/", omittingEmptySubsequences: true).map(String.init) }
+            .filter { $0 != "." && $0 != ".." }
+            .joined(separator: "/")
+    }
+
+    public static func normalizedDirectory(_ path: String) -> String {
+        let joined = join(path)
+        return joined.isEmpty ? "/" : "/\(joined)/"
+    }
+
+    fileprivate static func segments(_ path: String) throws -> [String] {
+        let raw = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let segments = raw.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !segments.contains(".") && !segments.contains("..") else {
+            throw JSRuntimeException(message: "Invalid WebDAV path: \(path)")
+        }
+        return segments
+    }
+}
+
 /// WebDAV 客户端（Basic Auth + PROPFIND/GET/PUT/MKCOL），供数据同步与
 /// 远程漫画库使用。对齐原版 webdav_client fork 的能力面。
 public final class WebDAVClient: @unchecked Sendable {
@@ -8,36 +52,50 @@ public final class WebDAVClient: @unchecked Sendable {
     public let username: String
     public let password: String
     private let session: URLSession
+    private let maxAttempts = 3
 
-    public init(url: String, username: String, password: String) throws {
+    public init(url: String, username: String, password: String, session: URLSession? = nil) throws {
         var string = url.trimmingCharacters(in: .whitespacesAndNewlines)
         if !string.hasSuffix("/") { string += "/" }
         guard let url = URL(string: string),
               let scheme = url.scheme?.lowercased(),
               ["http", "https"].contains(scheme),
-              url.host != nil
+              url.host != nil,
+              url.query == nil,
+              url.fragment == nil
         else {
             throw JSRuntimeException(message: "Invalid WebDAV URL: \(url)")
         }
         self.baseURL = url
         self.username = username
         self.password = password
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 90
-        configuration.waitsForConnectivity = false
-        self.session = URLSession(configuration: configuration)
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            configuration.timeoutIntervalForRequest = 30
+            configuration.timeoutIntervalForResource = 90
+            configuration.waitsForConnectivity = false
+            self.session = URLSession(configuration: configuration)
+        }
+    }
+
+    /// Resolves a raw WebDAV path relative to `baseURL`, preserving a base
+    /// path such as `/webdav/venerax/` and percent-encoding each component.
+    public func url(for path: String) throws -> URL {
+        var result = baseURL
+        for segment in try WebDAVPath.segments(path) {
+            result.appendPathComponent(segment, isDirectory: false)
+        }
+        return result
     }
 
     private func makeRequest(method: String, path: String, body: Data?) throws -> URLRequest {
-        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
-            throw JSRuntimeException(message: "Invalid WebDAV path: \(path)")
-        }
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: try url(for: path))
         request.httpMethod = method
         request.httpBody = body
-        request.timeoutInterval = 30
+        request.timeoutInterval = method == "PROPFIND" ? 30 : 90
         let credentials = "\(username):\(password)"
         let encoded = Data(credentials.utf8).base64EncodedString()
         request.setValue("Basic \(encoded)", forHTTPHeaderField: "Authorization")
@@ -45,17 +103,56 @@ public final class WebDAVClient: @unchecked Sendable {
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        try Task.checkCancellation()
-        let (data, response) = try await session.data(for: request)
-        try Task.checkCancellation()
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw JSRuntimeException(message: "Invalid response")
+        var lastError: Error?
+        for attempt in 0..<maxAttempts {
+            try Task.checkCancellation()
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw JSRuntimeException(message: "Invalid response")
+                }
+                if attempt + 1 < maxAttempts && Self.shouldRetry(status: httpResponse.statusCode) {
+                    try await Self.backoff(attempt: attempt, retryAfter: httpResponse.value(forHTTPHeaderField: "Retry-After"))
+                    continue
+                }
+                try Task.checkCancellation()
+                return (data, httpResponse)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where attempt + 1 < maxAttempts && Self.shouldRetry(error: error) {
+                lastError = error
+                try await Self.backoff(attempt: attempt, retryAfter: nil)
+            } catch {
+                throw error
+            }
         }
-        return (data, httpResponse)
+        throw lastError ?? JSRuntimeException(message: "WebDAV request failed")
     }
 
-    /// 列出目录下的文件名（PROPFIND depth 1）。
-    public func list(_ path: String = "/") async throws -> [String] {
+    private static func shouldRetry(status: Int) -> Bool {
+        status == 408 || status == 425 || status == 429 || (500...599).contains(status)
+    }
+
+    private static func shouldRetry(error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .cannotConnectToHost, .networkConnectionLost,
+             .notConnectedToInternet, .dnsLookupFailed, .cannotFindHost:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func backoff(attempt: Int, retryAfter: String?) async throws {
+        let seconds = retryAfter.flatMap(Double.init).map { min(max($0, 0), 5) }
+            ?? (0.25 * pow(2, Double(attempt)))
+        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    /// Lists immediate children and preserves whether each item is a DAV
+    /// collection. This is needed by migration: an archive file with the same
+    /// name must not be mistaken for an existing comic directory.
+    public func listResources(_ path: String = "/") async throws -> [WebDAVResource] {
         let body = """
         <?xml version="1.0"?>
         <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>
@@ -67,22 +164,22 @@ public final class WebDAVClient: @unchecked Sendable {
         guard response.statusCode == 207 else {
             throw SyncError.http(status: response.statusCode)
         }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        var names: [String] = []
-        // 兼容 D:/d: 命名空间前缀与无前缀的 <href>
-        for match in text.matches(of: try Regex("<(?:[Dd]:)?href>([^<]+)</(?:[Dd]:)?href>")) {
-            let href = match.output.count > 1 ? String(match.output[1].substring ?? "") : ""
-            let decoded = href.removingPercentEncoding ?? href
-            var name = decoded
-            if name.hasPrefix("/") { name = String(name.dropFirst()) }
-            while name.hasSuffix("/") { name.removeLast() }
-            if let last = name.split(separator: "/").last {
-                names.append(String(last))
-            }
+        let resources = try WebDAVPROPFINDParser.parse(data)
+        let targetPath = try url(for: path).path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .lowercased()
+        return resources.filter { resource in
+            let hrefPath = URL(string: resource.href)?.path ?? resource.href
+            let normalized = (hrefPath.removingPercentEncoding ?? hrefPath)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .lowercased()
+            return normalized != targetPath
         }
-        // 第一个 href 是目录本身
-        if !names.isEmpty { names.removeFirst() }
-        return names
+    }
+
+    /// 列出目录下的文件名（PROPFIND depth 1）。
+    public func list(_ path: String = "/") async throws -> [String] {
+        try await listResources(path).map(\.name)
     }
 
     public func get(_ path: String) async throws -> Data {
@@ -108,6 +205,62 @@ public final class WebDAVClient: @unchecked Sendable {
         guard (200..<300).contains(response.statusCode) || response.statusCode == 405 else {
             throw SyncError.http(status: response.statusCode)
         }
+    }
+}
+
+private final class WebDAVPROPFINDParser: NSObject, XMLParserDelegate {
+    private var currentHref = ""
+    private var currentText = ""
+    private var currentCollection = false
+    private var insideResponse = false
+    private(set) var resources: [WebDAVResource] = []
+
+    static func parse(_ data: Data) throws -> [WebDAVResource] {
+        let parserDelegate = WebDAVPROPFINDParser()
+        let parser = XMLParser(data: data)
+        parser.shouldProcessNamespaces = true
+        parser.delegate = parserDelegate
+        guard parser.parse() else {
+            throw JSRuntimeException(message: parser.parserError?.localizedDescription ?? "Invalid WebDAV XML")
+        }
+        return parserDelegate.resources
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
+        let name = elementName.lowercased()
+        if name == "response" {
+            insideResponse = true
+            currentHref = ""
+            currentCollection = false
+        } else if insideResponse && name == "collection" {
+            currentCollection = true
+        }
+        currentText = ""
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        currentText += string
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?) {
+        let name = elementName.lowercased()
+        if insideResponse && name == "href" {
+            currentHref = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if name == "response" {
+            if !currentHref.isEmpty {
+                let decoded = currentHref.removingPercentEncoding ?? currentHref
+                var path = URL(string: decoded)?.path ?? decoded
+                while path.hasSuffix("/") { path.removeLast() }
+                let itemName = path.split(separator: "/").last.map(String.init) ?? ""
+                if !itemName.isEmpty {
+                    resources.append(WebDAVResource(name: itemName, href: currentHref, isCollection: currentCollection))
+                }
+            }
+            insideResponse = false
+        }
+        currentText = ""
     }
 }
 
@@ -150,6 +303,25 @@ public final class DataSync: @unchecked Sendable {
 
     private var dataVersion: Int {
         AppData.shared.settings["dataVersion"].intValue ?? 0
+    }
+
+    private var pendingPublish: (fileName: String, size: Int?)? {
+        let value = AppData.shared.implicitValue("webdavPendingPublish")
+        guard case .object(let object) = value,
+              let fileName = object["fileName"]?.stringValue,
+              !fileName.isEmpty else { return nil }
+        return (fileName, object["size"]?.intValue)
+    }
+
+    private func setPendingPublish(fileName: String, size: Int) {
+        AppData.shared.setImplicitValue("webdavPendingPublish", .object([
+            "fileName": .string(fileName),
+            "size": .int(size),
+        ]))
+    }
+
+    private func clearPendingPublish() {
+        AppData.shared.setImplicitValue("webdavPendingPublish", .null)
     }
 
     // MARK: - 同步模式（implicitData，设备本地不参与同步）
@@ -269,8 +441,9 @@ public final class DataSync: @unchecked Sendable {
         let syncLocal = AppData.shared.settings["syncLocalComics"].boolValue ?? true
         let includeLocalComics = !sync || syncLocal
 
-        // 导出前合并 WAL
-        for db in ["history.db", "local_favorite.db", "read_later.db", "cookie.db", "cache.db", "local.db"] {
+        // 导出前合并 WAL。缓存不是 Flutter `.venera` 协议的一部分，不能把
+        // 设备私有缓存带到另一台设备；只 checkpoint 会让它继续占用无意义的启动时间。
+        for db in ["history.db", "local_favorite.db", "local.db", "read_later.db", "cookie.db"] {
             if FileIO.exists(AppPaths.join(dataPath, db)) {
                 _ = try? DatabaseGateway.shared.openManaged(AppPaths.join(dataPath, db)).checkpoint()
             }
@@ -339,7 +512,7 @@ public final class DataSync: @unchecked Sendable {
 
     /// 导入 `.venera` 备份：关闭连接 → 换库 → 应用 appdata（syncData 语义，
     /// 不回传服务器）。settings 键级兼容。
-    public func importAppData(_ data: Data) throws {
+    public func importAppData(_ data: Data, restoreLocalComics: Bool = true) throws {
         guard let archive = try? Archive(data: data, accessMode: .read, pathEncoding: .utf8) else {
             throw SyncError.invalidArchive
         }
@@ -362,6 +535,11 @@ public final class DataSync: @unchecked Sendable {
             _ = try? archive.extract(entry, to: destinationURL)
             let path = destinationURL.path
             if name.hasSuffix(".db") {
+                // `syncLocalComics` is a receiving-device policy. A backup may
+                // contain local.db, but an opted-out device must not replace its
+                // own local library manifest (Flutter restoreLocalComics).
+                if name == "local.db" && !restoreLocalComics { continue }
+                guard ["history.db", "local_favorite.db", "local.db", "read_later.db", "cookie.db"].contains(name) else { continue }
                 dbFiles[AppPaths.join(AppPaths.dataPath, name)] = path
             } else if name.hasPrefix("comic_source/") {
                 sourceFiles[name] = path
@@ -440,10 +618,16 @@ public final class DataSync: @unchecked Sendable {
         let version = SyncProtocol.nextSyncVersion(dataVersion, remoteMax)
         let data = try exportAppData(sync: true)
         let days = Int(Date().timeIntervalSince1970 / 86400)
-        let fileName = "\(days)-\(version).ios.venera"
-        try await client.put("/\(fileName)", data)
+        let fileName = "\(days)-\(version).\(SyncProtocol.platformTag).venera"
+        setPendingPublish(fileName: fileName, size: data.count)
+        try await client.put(fileName, data)
         AppData.shared.settings["dataVersion"] = .int(version)
-        try await pruneOldBackups(client, keep: AppData.shared.settings["webdavBackupRetention"].intValue ?? 10)
+        clearPendingPublish()
+        try await pruneOldBackups(
+            client,
+            keep: AppData.shared.settings["webdavBackupRetention"].intValue ?? SyncProtocol.backupRetentionPerPlatform,
+            newFileName: fileName
+        )
         appendSyncLog(action: "upload", success: true, fileName: fileName, error: nil)
     }
 
@@ -452,10 +636,25 @@ public final class DataSync: @unchecked Sendable {
         guard let config else { throw SyncError.notConfigured }
         let client = try WebDAVClient(url: config.url, username: config.user, password: config.password)
         guard let latest = try await remoteLatest(client) else { return }
+        if let claim = pendingPublish,
+           SyncProtocol.isOwnPendingPublish(
+                claimedFileName: claim.fileName,
+                claimedSize: claim.size,
+                remoteFileName: latest.name,
+                remoteSize: nil
+           ) {
+            if latest.version > dataVersion {
+                AppData.shared.settings["dataVersion"] = .int(latest.version)
+                AppData.shared.saveData(sync: false)
+            }
+            clearPendingPublish()
+            return
+        }
+        clearPendingPublish()
         guard latest.version > dataVersion else { return }
-        let data = try await client.get("/\(latest.name)")
+        let data = try await client.get(latest.name)
         try await withApplyingBackup {
-            try importAppData(data)
+            try importAppData(data, restoreLocalComics: AppData.shared.settings["syncLocalComics"].boolValue ?? true)
         }
         AppData.shared.settings["dataVersion"] = .int(latest.version)
         appendSyncLog(action: "download", success: true, fileName: latest.name, error: nil)
@@ -486,22 +685,25 @@ public final class DataSync: @unchecked Sendable {
         let client = try WebDAVClient(url: config.url, username: config.user, password: config.password)
         let data = try await client.get("/\(fileName)")
         try await withApplyingBackup {
-            try importAppData(data)
+            try importAppData(data, restoreLocalComics: AppData.shared.settings["syncLocalComics"].boolValue ?? true)
         }
         let version = RemoteBackupInfo.fromFileName(fileName).version
         AppData.shared.settings["dataVersion"] = .int(max(version, dataVersion))
         appendSyncLog(action: "download", success: true, fileName: fileName, error: nil)
     }
 
-    /// 每平台保留 N 份（对齐 webdavBackupRetention）。
-    public func pruneOldBackups(_ client: WebDAVClient, keep: Int) async throws {
+    /// 每个平台保留 N 份（与 Flutter backupsBeyondPlatformRetention 对齐）。
+    public func pruneOldBackups(_ client: WebDAVClient, keep: Int, newFileName: String? = nil) async throws {
         let names = try await client.list("/")
-        let backups = names.filter { $0.hasSuffix(".venera") && $0.contains(".ios.") }
-            .map { RemoteBackupInfo.fromFileName($0) }
-            .sorted { $0.version > $1.version }
-        guard backups.count > keep else { return }
-        for info in backups.suffix(backups.count - keep) {
-            _ = try? await client.delete("/\(info.fileName)")
+        let backups = names.filter { $0.hasSuffix(".venera") }
+        let currentFileName = newFileName ?? "\(Int(Date().timeIntervalSince1970 / 86400))-\(dataVersion).\(SyncProtocol.platformTag).venera"
+        let stale = SyncProtocol.backupsBeyondPlatformRetention(
+            fileNames: backups.map(Optional.some),
+            newFileName: currentFileName,
+            keepPerPlatform: keep
+        )
+        for fileName in stale {
+            _ = try? await client.delete(fileName)
         }
     }
 }

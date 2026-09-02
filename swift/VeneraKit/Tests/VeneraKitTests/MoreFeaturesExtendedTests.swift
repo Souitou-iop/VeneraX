@@ -30,6 +30,95 @@ final class MoreFeaturesExtendedTests: XCTestCase {
         XCTAssertEqual(item.url, "https://example.com/source.js")
     }
 
+    func testStableWebDAVLibraryIDMatchesFlutterNormalizationAndMD5() {
+        XCTAssertEqual(
+            stableWebdavLibraryId(" HTTPS://Example.com/webdav/// ", " Alice ", " Comics/// "),
+            "4ceb4c3289f4"
+        )
+        XCTAssertEqual(
+            stableWebdavLibraryId("https://example.com/webdav", "Alice", ""),
+            "d93dd66a1972"
+        )
+    }
+
+    func testWebDAVLibraryConfigDefaultsDetectLinkedFoldersToFalse() {
+        let json = JSON.object([
+            "url": .string("https://example.com/webdav"),
+            "user": .string("alice"),
+            "pass": .string("secret"),
+            "root": .string("Comics"),
+        ])
+
+        let config = WebdavLibraryConfig.fromJson(json)
+        XCTAssertEqual(config?.id, "cf7061c2729d")
+        XCTAssertEqual(config?.sourceKey, WebDAVLibraryStore.legacySourceKey)
+        XCTAssertFalse(config?.detectLinkedFolders ?? true)
+        XCTAssertEqual(config?.toJson()["detectLinkedFolders"].boolValue, false)
+    }
+
+    func testWebDAVLibraryStorePrefersCanonicalKeyEvenWhenItIsEmpty() {
+        let appData = AppData.shared
+        let canonical = appData.settings[WebDAVLibraryStore.settingsKey]
+        let legacy = appData.settings[WebDAVLibraryStore.legacySettingsKey]
+        defer {
+            appData.settings[WebDAVLibraryStore.settingsKey] = canonical
+            appData.settings[WebDAVLibraryStore.legacySettingsKey] = legacy
+            appData.saveData(sync: false)
+        }
+
+        appData.settings[WebDAVLibraryStore.settingsKey] = .array([])
+        appData.settings[WebDAVLibraryStore.legacySettingsKey] = .array([
+            .object([
+                "id": .string("stale-legacy-id"),
+                "sourceKey": .string("stale-legacy-source"),
+                "url": .string("https://legacy.example/webdav"),
+            ])
+        ])
+
+        XCTAssertTrue(WebDAVLibraryStore.shared.all().isEmpty)
+    }
+
+    func testWebDAVLibraryStoreReadsLegacyKeyAndWritesCanonicalFlutterKey() {
+        let appData = AppData.shared
+        let canonical = appData.settings[WebDAVLibraryStore.settingsKey]
+        let legacy = appData.settings[WebDAVLibraryStore.legacySettingsKey]
+        defer {
+            appData.settings[WebDAVLibraryStore.settingsKey] = canonical
+            appData.settings[WebDAVLibraryStore.legacySettingsKey] = legacy
+            appData.saveData(sync: false)
+        }
+
+        appData.settings[WebDAVLibraryStore.settingsKey] = .null
+        appData.settings[WebDAVLibraryStore.legacySettingsKey] = .array([
+            .object([
+                "id": .string("legacy-id"),
+                "sourceKey": .string("legacy-source"),
+                "name": .string("Legacy NAS"),
+                "url": .string("https://legacy.example/webdav"),
+                "user": .string("alice"),
+                "pass": .string("secret"),
+                "root": .string("Comics"),
+            ])
+        ])
+
+        XCTAssertEqual(WebDAVLibraryStore.shared.all().map(\.name), ["Legacy NAS"])
+        XCTAssertFalse(WebDAVLibraryStore.shared.all()[0].detectLinkedFolders)
+
+        let added = WebDAVLibraryStore.shared.add(
+            name: "New NAS",
+            url: "https://new.example/webdav/",
+            user: " bob ",
+            pass: "secret",
+            root: " /Manga/ ",
+            detectLinkedFolders: true
+        )
+
+        XCTAssertEqual(appData.settings[WebDAVLibraryStore.settingsKey].arrayValue?.count, 2)
+        XCTAssertEqual(appData.settings[WebDAVLibraryStore.legacySettingsKey].arrayValue?.count, 1)
+        XCTAssertTrue(appData.settings[WebDAVLibraryStore.settingsKey].arrayValue?.contains { $0["id"].stringValue == added.id } == true)
+        XCTAssertTrue(WebDAVLibraryStore.shared.find(id: added.id)?.detectLinkedFolders == true)
+    }
+
     func testWebDAVLibraryStore() {
         let store = WebDAVLibraryStore.shared
 

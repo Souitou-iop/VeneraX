@@ -7,6 +7,7 @@ struct WebDAVLibrariesView: View {
     @State private var showEditSheet = false
     @State private var editingLibrary: WebdavLibraryConfig?
     @State private var selectedLibrary: WebdavLibraryConfig?
+    @State private var migrationMessage: String?
 
     var body: some View {
         List {
@@ -46,6 +47,17 @@ struct WebDAVLibrariesView: View {
                         }
 
                         Button {
+                            if DataSyncManager.shared.startWebDAVMigration(libraryID: lib.id) == nil {
+                                migrationMessage = "No downloaded local comics or another WebDAV task is already running."
+                            } else {
+                                migrationMessage = "Migration started. Track progress in Task Center."
+                            }
+                        } label: {
+                            Label("Migrate Local Comics".tl, systemImage: "arrow.up.right")
+                        }
+                        .tint(.green)
+
+                        Button {
                             editingLibrary = lib
                             showEditSheet = true
                         } label: {
@@ -79,6 +91,9 @@ struct WebDAVLibrariesView: View {
             }
         }
         .onAppear(perform: reload)
+        .alert("WebDAV Migration".tl, isPresented: Binding(get: { migrationMessage != nil }, set: { if !$0 { migrationMessage = nil } })) {
+            Button("OK".tl) { migrationMessage = nil }
+        } message: { Text(verbatim: migrationMessage ?? "") }
     }
 
     private func reload() {

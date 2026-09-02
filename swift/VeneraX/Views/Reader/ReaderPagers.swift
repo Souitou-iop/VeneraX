@@ -26,11 +26,16 @@ struct GalleryPager: View {
     private var singlePageGallery: some View {
         TabView(selection: $selectedPage) {
             ForEach(model.pages.indices, id: \.self) { index in
-                ReaderPageView(
-                    model: model, index: index,
-                    chapterTransition: chapterTransition,
-                    onTapToolbar: onTapToolbar
-                )
+                TranslatedReaderPageView(
+                    cacheKey: model.translationCacheKey(for: index) ?? "page-\(index)",
+                    imageData: { await model.imageData(at: index) }
+                ) {
+                    ReaderPageView(
+                        model: model, index: index,
+                        chapterTransition: chapterTransition,
+                        onTapToolbar: onTapToolbar
+                    )
+                }
                 .tag(index)
             }
             if let chapterCommentsPage {
@@ -70,147 +75,136 @@ struct GalleryPager: View {
     }
 
     private var twoPageGallery: some View {
-        let spreads = Array(stride(from: 0, to: model.pages.count, by: 2))
-        let commentsIndex = model.pages.count
+        let spreads = ReaderModel.gallerySpreads(
+            pageCount: model.pages.count,
+            pagesPerSpread: 2,
+            showSingleImageOnFirstPage: showSingleImageOnFirstPage
+        )
+        let leadingSentinel = -1
+        let commentsIndex = spreads.count
+        let trailingSentinel = commentsIndex + (chapterCommentsPage == nil ? 0 : 1)
+
         return TabView(selection: $selectedSpread) {
-            ForEach(spreads, id: \.self) { spreadIndex in
+            Color.clear
+                .contentShape(Rectangle())
+                .tag(leadingSentinel)
+
+            ForEach(Array(spreads.enumerated()), id: \.offset) { spreadOffset, spread in
                 HStack(spacing: 4) {
-                    if model.mode.isRightToLeft {
-                        if spreadIndex + 1 < model.pages.count {
+                    let indices = model.mode.isRightToLeft
+                        ? Array(spread.pageIndices.reversed())
+                        : spread.pageIndices
+                    ForEach(indices, id: \.self) { pageIndex in
+                        TranslatedReaderPageView(
+                            cacheKey: model.translationCacheKey(for: pageIndex) ?? "page-\(pageIndex)",
+                            imageData: { await model.imageData(at: pageIndex) }
+                        ) {
                             ReaderPageView(
-                                model: model, index: spreadIndex + 1,
+                                model: model, index: pageIndex,
                                 chapterTransition: chapterTransition,
                                 onTapToolbar: onTapToolbar
                             )
                         }
-                        ReaderPageView(
-                            model: model, index: spreadIndex,
-                            chapterTransition: chapterTransition,
-                            onTapToolbar: onTapToolbar
-                        )
-                    } else {
-                        ReaderPageView(
-                            model: model, index: spreadIndex,
-                            chapterTransition: chapterTransition,
-                            onTapToolbar: onTapToolbar
-                        )
-                        if spreadIndex + 1 < model.pages.count {
-                            ReaderPageView(
-                                model: model, index: spreadIndex + 1,
-                                chapterTransition: chapterTransition,
-                                onTapToolbar: onTapToolbar
-                            )
-                        }
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                .tag(spreadIndex)
+                .tag(spreadOffset)
             }
+
             if let chapterCommentsPage {
                 chapterCommentsPage
                     .tag(commentsIndex)
                     .background(Color(uiColor: .systemBackground))
             }
+
+            Color.clear
+                .contentShape(Rectangle())
+                .tag(trailingSentinel)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .environment(\.layoutDirection, model.mode.isRightToLeft ? .rightToLeft : .leftToRight)
         .onAppear {
-            selectedSpread = model.currentIndex / 2 * 2
+            selectedSpread = ReaderModel.gallerySpreadIndex(
+                forImageIndex: model.currentIndex,
+                pageCount: model.pages.count,
+                pagesPerSpread: 2,
+                showSingleImageOnFirstPage: showSingleImageOnFirstPage
+            )
         }
         .onChange(of: selectedSpread) { _, newValue in
-            if newValue == commentsIndex, chapterCommentsPage != nil {
-                isShowingChapterCommentsPage.wrappedValue = true
-            } else {
-                isShowingChapterCommentsPage.wrappedValue = false
-                if model.pages.indices.contains(newValue), model.currentIndex != newValue {
-                    ReaderPageTurning.turn(model, to: newValue)
-                }
-            }
+            handleTwoPageSelection(
+                newValue,
+                spreads: spreads,
+                leadingSentinel: leadingSentinel,
+                commentsIndex: commentsIndex,
+                trailingSentinel: trailingSentinel
+            )
         }
         .onChange(of: model.currentIndex) { _, newValue in
             guard !isShowingChapterCommentsPage.wrappedValue else { return }
-            let spread = newValue / 2 * 2
+            let spread = ReaderModel.gallerySpreadIndex(
+                forImageIndex: newValue,
+                pageCount: model.pages.count,
+                pagesPerSpread: 2,
+                showSingleImageOnFirstPage: showSingleImageOnFirstPage
+            )
             if selectedSpread != spread { selectedSpread = spread }
         }
         .onChange(of: model.pages.count) { _, _ in
             guard !isShowingChapterCommentsPage.wrappedValue else { return }
-            selectedSpread = model.currentIndex / 2 * 2
+            selectedSpread = ReaderModel.gallerySpreadIndex(
+                forImageIndex: model.currentIndex,
+                pageCount: model.pages.count,
+                pagesPerSpread: 2,
+                showSingleImageOnFirstPage: showSingleImageOnFirstPage
+            )
         }
     }
-}
 
-/// 连续滚动引擎（continuous TTB/LTR/RTL），支持跨章节平滑追加与章节分隔标头。
-struct ContinuousPager: View {
-    @Bindable var model: ReaderModel
-    var chapterTransition: Binding<String?> = .constant(nil)
-    var onTapToolbar: () -> Void = {}
+    private var showSingleImageOnFirstPage: Bool {
+        AppData.shared.settings["showSingleImageOnFirstPage"].boolValue ?? false
+    }
 
-    var body: some View {
-        if model.mode == .continuousTopToBottom {
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 0) {
-                    continuousItemViews
+    private func handleTwoPageSelection(
+        _ newValue: Int,
+        spreads: [ReaderModel.GallerySpread],
+        leadingSentinel: Int,
+        commentsIndex: Int,
+        trailingSentinel: Int
+    ) {
+        if newValue == leadingSentinel {
+            Task {
+                let changed = await ReaderPageTurning.goPrevious(model, chapterTransition: chapterTransition)
+                if !changed {
+                    selectedSpread = spreads.isEmpty ? 0 : 0
                 }
             }
-        } else {
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
-                    continuousItemViews
+            return
+        }
+
+        if newValue == commentsIndex, chapterCommentsPage != nil {
+            isShowingChapterCommentsPage.wrappedValue = true
+            return
+        }
+
+        if newValue == trailingSentinel {
+            isShowingChapterCommentsPage.wrappedValue = false
+            Task {
+                let changed = await ReaderPageTurning.goNext(model, chapterTransition: chapterTransition)
+                if !changed {
+                    selectedSpread = max(spreads.count - 1, 0)
                 }
             }
-            .environment(\.layoutDirection, model.mode.isRightToLeft ? .rightToLeft : .leftToRight)
-        }
-    }
-
-    @ViewBuilder
-    private var continuousItemViews: some View {
-        ForEach(model.continuousItems) { item in
-            if item.isChapterHeader {
-                chapterDividerView(title: item.chapterTitle ?? "")
-                    .onAppear {
-                        model.onContinuousItemVisible(item)
-                    }
-            } else {
-                ContinuousPageView(
-                    model: model,
-                    item: item,
-                    onTapToolbar: onTapToolbar
-                )
-                .frame(width: UIScreen.main.bounds.width, height: UIScreen.main.bounds.height)
-                .onAppear {
-                    model.onContinuousItemVisible(item)
-                }
-            }
+            return
         }
 
-        if model.isLoadingNextChapter {
-            HStack(spacing: 8) {
-                ProgressView()
-                Text("Loading next chapter...".tl)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(16)
-        }
+        isShowingChapterCommentsPage.wrappedValue = false
+        guard spreads.indices.contains(newValue),
+              let lastPage = spreads[newValue].pageIndices.last,
+              model.currentIndex != lastPage else { return }
+        ReaderPageTurning.turn(model, to: lastPage)
     }
 
-    private func chapterDividerView(title: String) -> some View {
-        HStack(spacing: 12) {
-            Rectangle()
-                .fill(.quaternary)
-                .frame(height: 1)
-            Text(verbatim: title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.ultraThinMaterial, in: Capsule())
-            Rectangle()
-                .fill(.quaternary)
-                .frame(height: 1)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-    }
 }
 
 /// 连续模式单页视图：自动加载指定条目并应用画质增强滤镜。

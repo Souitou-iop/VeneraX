@@ -104,3 +104,22 @@
 - Release 单元测试当前为 **90/90 通过**；测试仍包含主动损坏数据库用例和未注册 `uuid` handler 的既有日志噪声。
 - 这些改动改善了任务可追踪性和“网络永不返回”风险，但同步进度目前仍是阶段性估计，不是远端传输字节级进度；WebDAV 真服务器、网络断开恢复、后台挂起/恢复仍需真实环境验收。
 
+
+## 2026-09-02 WebDAV 跨版本兼容与只读 VPS 审计
+
+- 对阿里云 VPS 执行只读检查：确认 WebDAV 由 Docker `httpd:2.4-bookworm` 提供，启用 `mod_dav`/`mod_dav_fs` 与 Basic Auth；Nginx 通过 `/webdav/` 反代到 `127.0.0.1:8686`，关闭请求/响应缓冲并设置 3600 秒读写超时，远端配置未修改。
+- 远端 `/srv/webdav/venerax` 发现 20 个跨平台 `.venera` 备份，包含 `ios`、`android`、`macos`、`win` 后缀；只读取文件名、大小和时间元数据，未读取备份内容、密码文件或其他项目数据。
+- 脱敏的 WebDAV 服务配置和 VeneraX 备份元数据复制到本机临时目录 `/tmp/venerax-webdav-audit-20260902.3wsRpe`，仅用于协议研究。
+- Swift WebDAV 漫画库配置改为优先读取 Flutter 的 `webdavComicLibraries`，兼容旧 `webdavLibraries`；对齐 URL/user/root 归一化、MD5 稳定 library ID 和 `detectLinkedFolders` 字段。
+- Swift `.venera` 同步对齐 Flutter 的平台后缀、数字版本比较、每平台独立保留、`webdavPendingPublish` 异常上传认领、`syncLocalComics`/`syncLocalComicImages` 本地策略和 `syncdata.json` 语义。
+- WebDAV 客户端保留基础路径（例如 `/webdav/venerax/`），增加 DAV collection 类型解析、中文/空格/`%`/`#` 编码、路径穿越拒绝、Basic Auth、`Depth: 1` 和瞬时错误有限重试；`401/403/404` 等明确错误不重试。
+- 漫画库迁移仅在本地代码中完善为真实任务；没有向生产 VPS 执行 `PUT`、`MKCOL`、删除或移动操作。真实跨 App 读写仍需使用隔离 WebDAV 测试目录。
+- `swift test --package-path swift/VeneraKit`：117/117 通过；保留的损坏数据库与缺失 `uuid` handler 日志属于既有测试噪声。
+- `xcodebuild` iOS Simulator Debug 构建：成功；已安装并启动到 `VeneraX-Test`（UDID `B37FC62C-8F44-42B7-A003-7B2779255ED3`），首屏可见。
+- `git diff --check`：通过。
+
+### 当前不能声称
+
+- 尚未用生产 VPS 执行真实写入测试，以免影响多个项目。
+- 尚未完成 Flutter 实际读取 Swift 新上传漫画目录、Swift 实际读取 Flutter 新上传漫画目录的隔离端到端验证。
+- 未完成真实大文件上传、中断续传和断点恢复测试。

@@ -31,6 +31,93 @@ public final class ReaderModel {
         }
     }
 
+    public struct GallerySpread: Hashable, Sendable {
+        public let pageIndices: [Int]
+
+        public init(pageIndices: [Int]) {
+            self.pageIndices = pageIndices
+        }
+    }
+
+    /// Build logical gallery spreads without loading or decoding page images.
+    /// When enabled, the cover is kept alone and subsequent spreads contain two pages.
+    nonisolated public static func gallerySpreads(
+        pageCount: Int,
+        pagesPerSpread: Int = 2,
+        showSingleImageOnFirstPage: Bool = false
+    ) -> [GallerySpread] {
+        guard pageCount > 0 else { return [] }
+        let count = max(pagesPerSpread, 1)
+        var result: [GallerySpread] = []
+        var nextIndex = 0
+        if showSingleImageOnFirstPage {
+            result.append(GallerySpread(pageIndices: [0]))
+            nextIndex = 1
+        }
+        while nextIndex < pageCount {
+            let end = min(nextIndex + count, pageCount)
+            result.append(GallerySpread(pageIndices: Array(nextIndex..<end)))
+            nextIndex = end
+        }
+        return result
+    }
+
+    nonisolated public static func continuousItems(
+        for epIndex: Int,
+        pageList: [String],
+        chapterTitle: String
+    ) -> [ContinuousPageItem] {
+        var items = [ContinuousPageItem(
+            epIndex: epIndex,
+            pageIndex: 0,
+            imageKey: "",
+            isChapterHeader: true,
+            chapterTitle: chapterTitle
+        )]
+        items += pageList.enumerated().map { pageIndex, imageKey in
+            ContinuousPageItem(
+                epIndex: epIndex,
+                pageIndex: pageIndex,
+                imageKey: imageKey,
+                chapterTitle: chapterTitle
+            )
+        }
+        return items
+    }
+
+    nonisolated public static func shouldPrefetchPreviousContinuousChapter(
+        itemOffset: Int,
+        itemCount: Int,
+        threshold: Int = 3
+    ) -> Bool {
+        guard itemCount > 0, itemOffset >= 0, itemOffset < itemCount else { return false }
+        return itemOffset <= max(threshold, 0)
+    }
+
+    nonisolated public static func shouldPrefetchNextContinuousChapter(
+        itemOffset: Int,
+        itemCount: Int,
+        threshold: Int = 3
+    ) -> Bool {
+        guard itemCount > 0, itemOffset >= 0, itemOffset < itemCount else { return false }
+        return itemOffset >= max(itemCount - 1 - max(threshold, 0), 0)
+    }
+
+    nonisolated public static func gallerySpreadIndex(
+        forImageIndex imageIndex: Int,
+        pageCount: Int,
+        pagesPerSpread: Int = 2,
+        showSingleImageOnFirstPage: Bool = false
+    ) -> Int {
+        let spreads = gallerySpreads(
+            pageCount: pageCount,
+            pagesPerSpread: pagesPerSpread,
+            showSingleImageOnFirstPage: showSingleImageOnFirstPage
+        )
+        guard !spreads.isEmpty else { return 0 }
+        return spreads.firstIndex { $0.pageIndices.contains(imageIndex) } ?? 0
+    }
+
     public struct ContinuousPageItem: Identifiable, Hashable, Sendable {
         public let id: String
         public let epIndex: Int
@@ -62,6 +149,10 @@ public final class ReaderModel {
     public var continuousItems: [ContinuousPageItem] = []
     public private(set) var loadedChapterIndices: Set<Int> = []
     public var isLoadingNextChapter = false
+    /// Used by the continuous pager to restore the first visible item after a
+    /// previous chapter is prepended. Stable IDs prevent the viewport from
+    /// jumping when the lazy stack grows at its leading edge.
+    public private(set) var continuousAnchorToRestoreID: String?
 
     /// 已加载的图片数据（画廊页码或连续条目 ID → 字节）。
     public var loadedImages: [Int: Data] = [:]
@@ -75,8 +166,8 @@ public final class ReaderModel {
     private var preloadTasks: [Int: Task<Void, Never>] = [:]
     private var retryTasks: [Int: Task<Void, Never>] = [:]
     private var retryTokens: [Int: UUID] = [:]
-    /// 连续阅读触底回调可能因 Lazy* 重建重复触发；保留唯一的追加任务，避免同一章节并发请求。
-    private var nextChapterLoadTask: Task<Void, Never>?
+    private var continuousChapterLoadTasks: Set<Int> = []
+    private var attemptedContinuousChapterIndices: Set<Int> = []
     private var preloadTokens: [Int: UUID] = [:]
     private var loadGeneration = 0
     private let preloadCount: Int
@@ -118,14 +209,27 @@ public final class ReaderModel {
     public var currentPageNumber: Int { currentIndex + 1 }
     public var totalPages: Int { pages.count }
 
+    /// Stable identity used by the image-translation result cache.
+    public func translationCacheKey(for pageIndex: Int) -> String? {
+        guard pages.indices.contains(pageIndex) else { return nil }
+        let eid = chapterIds.indices.contains(currentEpIndex) ? chapterIds[currentEpIndex] : ""
+        return "\(comic.sourceKey)/\(comic.id)/\(eid)/\(pages[pageIndex])"
+    }
+
+    public func translationCacheKey(for item: ContinuousPageItem) -> String {
+        let eid = chapterIds.indices.contains(item.epIndex) ? chapterIds[item.epIndex] : ""
+        return "\(comic.sourceKey)/\(comic.id)/\(eid)/\(item.imageKey)"
+    }
+
     public func loadPages() async {
         loadGeneration &+= 1
         let generation = loadGeneration
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
         preloadTokens.removeAll()
-        nextChapterLoadTask?.cancel()
-        nextChapterLoadTask = nil
+        continuousChapterLoadTasks.removeAll()
+        attemptedContinuousChapterIndices.removeAll()
+        continuousAnchorToRestoreID = nil
         errorMessage = nil
         isLoadingPages = true
         defer {
@@ -200,58 +304,71 @@ public final class ReaderModel {
     }
 
     private func setupContinuousItems(for ep: Int, pageList: [String]) {
-        var items: [ContinuousPageItem] = []
         let title = chapterTitle(at: ep) ?? "Chapter \(ep + 1)"
-        items.append(ContinuousPageItem(epIndex: ep, pageIndex: 0, imageKey: "", isChapterHeader: true, chapterTitle: title))
-        for (pIdx, key) in pageList.enumerated() {
-            items.append(ContinuousPageItem(epIndex: ep, pageIndex: pIdx, imageKey: key, isChapterHeader: false, chapterTitle: title))
+        continuousItems = Self.continuousItems(for: ep, pageList: pageList, chapterTitle: title)
+        loadedChapterIndices.insert(ep)
+        attemptedContinuousChapterIndices.insert(ep)
+    }
+
+    /// 连续模式：按需加载一个相邻章节。只保留当前已加载章节附近的
+    /// entry，不会因为章节列表很长而加载全部图片地址或图片数据。
+    private func loadContinuousChapter(_ ep: Int, prepend: Bool) async {
+        guard mode.isContinuous, chapterIds.indices.contains(ep),
+              !loadedChapterIndices.contains(ep),
+              !attemptedContinuousChapterIndices.contains(ep),
+              !continuousChapterLoadTasks.contains(ep) else { return }
+
+        continuousChapterLoadTasks.insert(ep)
+        attemptedContinuousChapterIndices.insert(ep)
+        if prepend { isLoadingNextChapter = true }
+        defer {
+            continuousChapterLoadTasks.remove(ep)
+            isLoadingNextChapter = !continuousChapterLoadTasks.isEmpty
         }
-        continuousItems = items
+
+        guard let chapterPages = await fetchChapterPages(ep) else { return }
+        guard !chapterPages.isEmpty, !Task.isCancelled else { return }
+
+        let title = chapterTitle(at: ep) ?? "Chapter \(ep + 1)"
+        let newItems = Self.continuousItems(for: ep, pageList: chapterPages, chapterTitle: title)
+        if prepend {
+            continuousAnchorToRestoreID = continuousItems.first?.id
+            continuousItems.insert(contentsOf: newItems, at: 0)
+        } else {
+            continuousItems.append(contentsOf: newItems)
+        }
         loadedChapterIndices.insert(ep)
     }
 
-    /// 连续阅读的 Lazy* 视图可能多次触发 onAppear；把触底请求合并为一个可取消任务。
-    private func scheduleNextChapterLoad() {
-        guard nextChapterLoadTask == nil else { return }
-        nextChapterLoadTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.nextChapterLoadTask = nil }
-            await self.loadNextChapterInContinuousMode()
+    private func fetchChapterPages(_ ep: Int) async -> [String]? {
+        guard !Task.isCancelled else { return nil }
+        let comicType = ComicID.forSource(comic.sourceKey)
+        if comic.sourceKey == "local" || LocalManager.shared.isDownloaded(
+            id: comic.id, type: comicType, ep: ep + 1, chapters: detailsChapters
+        ) {
+            let pages = LocalManager.shared.getImages(id: comic.id, type: comicType, ep: ep + 1)
+            return pages.isEmpty ? nil : pages
         }
+        guard let source, chapterIds.indices.contains(ep) else { return nil }
+        return try? await source.loadComicPages(id: comic.id, ep: chapterIds[ep])
     }
 
-    /// 连续模式：预拉取并追加下一章节
+    /// 保留旧调用点语义：显式请求下一章时仍然可以直接调用。
     public func loadNextChapterInContinuousMode() async {
-        guard mode.isContinuous, !isLoadingNextChapter else { return }
-        let lastEp = continuousItems.last?.epIndex ?? currentEpIndex
-        let nextEp = lastEp + 1
-        guard chapterIds.indices.contains(nextEp), !loadedChapterIndices.contains(nextEp) else { return }
+        let lastLoaded = loadedChapterIndices.max() ?? currentEpIndex
+        guard chapterIds.indices.contains(lastLoaded + 1) else { return }
+        await loadContinuousChapter(lastLoaded + 1, prepend: false)
+    }
 
-        isLoadingNextChapter = true
-        defer { isLoadingNextChapter = false }
+    public func loadPreviousChapterInContinuousMode() async {
+        let firstLoaded = loadedChapterIndices.min() ?? currentEpIndex
+        guard chapterIds.indices.contains(firstLoaded - 1) else { return }
+        await loadContinuousChapter(firstLoaded - 1, prepend: true)
+    }
 
-        var nextPages: [String] = []
-        let comicType = ComicID.forSource(comic.sourceKey)
-
-        if comic.sourceKey == "local" || LocalManager.shared.isDownloaded(id: comic.id, type: comicType, ep: nextEp + 1, chapters: detailsChapters) {
-            nextPages = LocalManager.shared.getImages(id: comic.id, type: comicType, ep: nextEp + 1)
-        } else if let source {
-            let epId = chapterIds[nextEp]
-            if let pages = try? await source.loadComicPages(id: comic.id, ep: epId) {
-                nextPages = pages
-            }
-        }
-
-        guard !nextPages.isEmpty else { return }
-
-        let nextTitle = chapterTitle(at: nextEp) ?? "Chapter \(nextEp + 1)"
-        var appendItems: [ContinuousPageItem] = []
-        appendItems.append(ContinuousPageItem(epIndex: nextEp, pageIndex: 0, imageKey: "", isChapterHeader: true, chapterTitle: nextTitle))
-        for (pIdx, key) in nextPages.enumerated() {
-            appendItems.append(ContinuousPageItem(epIndex: nextEp, pageIndex: pIdx, imageKey: key, isChapterHeader: false, chapterTitle: nextTitle))
-        }
-        continuousItems.append(contentsOf: appendItems)
-        loadedChapterIndices.insert(nextEp)
+    public func consumeContinuousAnchorToRestoreID() -> String? {
+        defer { continuousAnchorToRestoreID = nil }
+        return continuousAnchorToRestoreID
     }
 
     /// 切换章节（页码归零；历史记录由调用方在合适时机写入）。
@@ -260,8 +377,9 @@ public final class ReaderModel {
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
         preloadTokens.removeAll()
-        nextChapterLoadTask?.cancel()
-        nextChapterLoadTask = nil
+        continuousChapterLoadTasks.removeAll()
+        attemptedContinuousChapterIndices.removeAll()
+        continuousAnchorToRestoreID = nil
         retryTasks.values.forEach { $0.cancel() }
         retryTasks.removeAll()
         retryTokens.removeAll()
@@ -288,19 +406,29 @@ public final class ReaderModel {
     }
 
     public func onContinuousItemVisible(_ item: ContinuousPageItem) {
+        guard let offset = continuousItems.firstIndex(where: { $0.id == item.id }) else { return }
+        if currentEpIndex != item.epIndex {
+            currentEpIndex = item.epIndex
+            if let chPages = getChapterPages(for: item.epIndex) { pages = chPages }
+        }
         if !item.isChapterHeader {
-            if currentEpIndex != item.epIndex {
-                currentEpIndex = item.epIndex
-                if let chPages = getChapterPages(for: item.epIndex) {
-                    pages = chPages
-                }
-            }
             currentIndex = item.pageIndex
             trimContinuousImages(around: item.id)
             recordHistory()
         }
-        if let last = continuousItems.last, item.epIndex >= last.epIndex, item.pageIndex >= max(0, pages.count - 3) {
-            scheduleNextChapterLoad()
+
+        let count = continuousItems.count
+        if Self.shouldPrefetchPreviousContinuousChapter(itemOffset: offset, itemCount: count) {
+            let previous = (loadedChapterIndices.min() ?? currentEpIndex) - 1
+            if chapterIds.indices.contains(previous) {
+                Task { [weak self] in await self?.loadContinuousChapter(previous, prepend: true) }
+            }
+        }
+        if Self.shouldPrefetchNextContinuousChapter(itemOffset: offset, itemCount: count) {
+            let next = (loadedChapterIndices.max() ?? currentEpIndex) + 1
+            if chapterIds.indices.contains(next) {
+                Task { [weak self] in await self?.loadContinuousChapter(next, prepend: false) }
+            }
         }
     }
 

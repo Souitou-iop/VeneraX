@@ -9,6 +9,7 @@ struct RandomComicDrawView: View {
     @State private var selectedFolder: String? = nil
     @State private var candidates: [FavoriteItem] = []
     @State private var drawnComic: FavoriteItem?
+    @State private var drawnComicIDs: Set<ComicID> = []
     @State private var isDrawing = false
     @State private var cardFlipped = false
     @State private var navigateToComic: Comic?
@@ -164,6 +165,9 @@ struct RandomComicDrawView: View {
             var seen = Set<String>()
             candidates = all.filter { seen.insert("\($0.type):\($0.id)").inserted }
         }
+        drawnComic = nil
+        drawnComicIDs.removeAll()
+        cardFlipped = false
     }
 
     private func performDraw() {
@@ -175,8 +179,16 @@ struct RandomComicDrawView: View {
         feedback.impactOccurred()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            let randomIndex = Int.random(in: 0..<candidates.count)
-            drawnComic = candidates[randomIndex]
+            // 与原版一致：一轮内不重复；候选池耗尽后自动开始下一轮。
+            if drawnComicIDs.count >= candidates.count {
+                drawnComicIDs.removeAll()
+            }
+            guard let comic = UniformRandomComicPicker().pick(candidates, excluding: drawnComicIDs) else {
+                isDrawing = false
+                return
+            }
+            drawnComic = comic
+            drawnComicIDs.insert(comic.comicID)
             cardFlipped = true
             isDrawing = false
             UINotificationFeedbackGenerator().notificationOccurred(.success)

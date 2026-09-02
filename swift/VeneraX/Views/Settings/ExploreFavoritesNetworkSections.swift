@@ -127,9 +127,8 @@ struct ExploreSettingsSection: View {
     @ViewBuilder
     private var defaultSearchTargetPicker: some View {
         let sources = ComicSourceManager.shared.all().filter { $0.searchAvailable }
-        let current = AppData.shared.settings["defaultSearchTarget"].stringValue ?? "_aggregated_"
         Picker("Default Search Target".tl, selection: Binding(
-            get: { current },
+            get: { AppData.shared.settings["defaultSearchTarget"].stringValue ?? "_aggregated_" },
             set: {
                 AppData.shared.settings["defaultSearchTarget"] = .string($0)
                 AppData.shared.saveData()
@@ -242,9 +241,8 @@ struct FavoritesSettingsSection: View {
     @ViewBuilder
     private var quickFavoritePicker: some View {
         let folders = folderNames
-        let current = AppData.shared.settings["quickFavorite"].stringValue ?? ""
         Picker("Quick Favorite".tl, selection: Binding(
-            get: { current },
+            get: { AppData.shared.settings["quickFavorite"].stringValue ?? "" },
             set: {
                 AppData.shared.settings["quickFavorite"] = $0.isEmpty ? .null : .string($0)
                 AppData.shared.saveData()

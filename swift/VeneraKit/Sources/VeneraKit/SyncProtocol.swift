@@ -36,16 +36,68 @@ public enum SyncProtocol {
         return max(localVersion, incomingVersion)
     }
 
+    /// 平台后缀必须与 Flutter 版一致，供备份文件名和保留策略复用。
+    public static var platformTag: String {
+#if os(iOS)
+        return "ios"
+#elseif os(macOS)
+        return "macos"
+#elseif os(Windows)
+        return "win"
+#elseif os(Linux)
+        return "linux"
+#else
+        return "unknown"
+#endif
+    }
+
     /// 从文件名列表中取最高备份版本号（数字比较而非字典序；
     /// 忽略非 `.venera` 条目），无有效条目时为 0。
     public static func maxBackupVersion<S: Sequence>(_ fileNames: S) -> Int where S.Element == String? {
-        var maxValue = 0
-        for name in fileNames {
-            guard let name, name.hasSuffix(".venera") else { continue }
-            let version = RemoteBackupInfo.fromFileName(name).version
-            if version > maxValue { maxValue = version }
+        fileNames.compactMap { name in
+            guard let name, name.hasSuffix(".venera") else { return nil }
+            return RemoteBackupInfo.fromFileName(name).version
+        }.max() ?? 0
+    }
+
+    /// 与 Flutter `isOwnPendingPublish` 对齐：只有文件名相同且已知大小不冲突时，
+    /// 才能把一次 PUT 后客户端未确认的远端文件认领回来。
+    public static func isOwnPendingPublish(
+        claimedFileName: String?, claimedSize: Int?,
+        remoteFileName: String, remoteSize: Int?
+    ) -> Bool {
+        guard claimedFileName == remoteFileName else { return false }
+        if let claimedSize, let remoteSize, claimedSize != remoteSize { return false }
+        return true
+    }
+
+    public static let backupRetentionPerPlatform = 10
+
+    public static func sanitizedBackupRetention(_ value: Int?) -> Int {
+        guard let value else { return backupRetentionPerPlatform }
+        return min(100, max(3, value))
+    }
+
+    /// 返回上传成功后可删除的旧备份。分平台按数字版本排序，且永不返回新文件。
+    public static func backupsBeyondPlatformRetention(
+        fileNames: [String?], newFileName: String, keepPerPlatform: Int
+    ) -> [String] {
+        let keep = sanitizedBackupRetention(keepPerPlatform)
+        var groups: [String: [RemoteBackupInfo]] = [:]
+        for name in fileNames.compactMap({ $0 }) where name.hasSuffix(".venera") {
+            let info = RemoteBackupInfo.fromFileName(name)
+            groups[info.platform, default: []].append(info)
         }
-        return maxValue
+        if !fileNames.contains(where: { $0 == newFileName }) {
+            let info = RemoteBackupInfo.fromFileName(newFileName)
+            groups[info.platform, default: []].append(info)
+        }
+        return groups.values.flatMap { group in
+            group.sorted { lhs, rhs in
+                if lhs.version != rhs.version { return lhs.version > rhs.version }
+                return lhs.fileName > rhs.fileName
+            }.dropFirst(keep).map(\.fileName).filter { $0 != newFileName }
+        }
     }
 }
 
@@ -63,7 +115,7 @@ public struct RemoteBackupInfo: Equatable, Sendable {
     private static let maxValidMs = 8_640_000_000_000_000
 
     public static func fromFileName(_ name: String, modifiedTime: Date? = nil) -> RemoteBackupInfo {
-        let base = name.replacingOccurrences(of: ".venera", with: "")
+        let base = String(name.dropLast(name.hasSuffix(".venera") ? ".venera".count : 0))
         let parts = base.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
         let days = parts.first.flatMap(Int.init) ?? 0
         let versionSegment = parts.count > 1 ? parts[1] : ""

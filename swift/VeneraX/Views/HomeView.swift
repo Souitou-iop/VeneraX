@@ -47,9 +47,9 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showLayoutEditor) {
                 HomeLayoutEditorSheet()
-                    .onDisappear { reload() }
+                    .onDisappear { Task { await reload() } }
             }
-            .onAppear(perform: reload)
+            .task { await reload() }
         }
     }
 
@@ -140,16 +140,41 @@ struct HomeView: View {
         .listRowInsets(EdgeInsets())
     }
 
-    private func reload() {
-        sections = HomeLayoutStore.loadSections()
-        recentHistory = HistoryManager.shared.getRecent(20)
+    private func reload() async {
+        let snapshot = await Task.detached(priority: .utility) {
+            HomeSnapshot(
+                sections: HomeLayoutStore.loadSections(),
+                recentHistory: HistoryManager.shared.getRecent(20),
+                localComicsCount: LocalManager.shared.count,
+                readLaterCount: ReadLaterManager.shared.getAll().count,
+                updatedCount: FollowUpdatesManager.shared.totalUpdatedCount,
+                collectionsCount: ComicCollectionStore.shared.all().count,
+                imageFavCount: ImageFavoriteManager.shared.count,
+                activeTasksCount: SourceMigrationManager.shared.activeTasks().count
+            )
+        }.value
+
+        guard !Task.isCancelled else { return }
+        sections = snapshot.sections
+        recentHistory = snapshot.recentHistory
         sources = AppServices.shared.sources
-        localComicsCount = LocalManager.shared.count
-        readLaterCount = ReadLaterManager.shared.getAll().count
-        updatedCount = FollowUpdatesManager.shared.totalUpdatedCount
-        collectionsCount = ComicCollectionStore.shared.all().count
-        imageFavCount = ImageFavoriteManager.shared.count
-        activeTasksCount = SourceMigrationManager.shared.activeTasks().count
+        localComicsCount = snapshot.localComicsCount
+        readLaterCount = snapshot.readLaterCount
+        updatedCount = snapshot.updatedCount
+        collectionsCount = snapshot.collectionsCount
+        imageFavCount = snapshot.imageFavCount
+        activeTasksCount = snapshot.activeTasksCount
+    }
+
+    private struct HomeSnapshot: Sendable {
+        let sections: [HomeSectionItem]
+        let recentHistory: [History]
+        let localComicsCount: Int
+        let readLaterCount: Int
+        let updatedCount: Int
+        let collectionsCount: Int
+        let imageFavCount: Int
+        let activeTasksCount: Int
     }
 }
 

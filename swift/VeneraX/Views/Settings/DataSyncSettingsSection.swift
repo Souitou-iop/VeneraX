@@ -8,6 +8,10 @@ struct DataSyncSettingsSection: View {
     @State private var cacheSize: Int = CacheManager.shared.size
     @State private var showImporter = false
     @State private var showWebdavConfig = false
+    @State private var showSyncScanner = false
+    @State private var showSyncPIN = false
+    @State private var scannedSyncURI: String?
+    @State private var importedSyncPayload: SyncConfigPayload?
     @State private var showBackupPicker = false
     @State private var showSyncLogs = false
     @State private var showSkipSync = false
@@ -36,7 +40,20 @@ struct DataSyncSettingsSection: View {
             importBackup(result)
         }
         .sheet(isPresented: $showWebdavConfig) {
-            WebdavConfigSheet()
+            WebdavConfigSheet(initialConfig: importedSyncPayload)
+                .onDisappear { importedSyncPayload = nil }
+        }
+        .sheet(isPresented: $showSyncScanner) {
+            SyncConfigScannerView { raw in
+                scannedSyncURI = raw
+                showSyncScanner = false
+                showSyncPIN = true
+            }
+        }
+        .sheet(isPresented: $showSyncPIN) {
+            SyncConfigPINEntryView { pin in
+                decodeSyncConfig(scannedSyncURI, pin: pin)
+            }
         }
         .sheet(isPresented: $showBackupPicker) {
             RemoteBackupPicker { name in
@@ -143,6 +160,10 @@ struct DataSyncSettingsSection: View {
             ) {
                 showWebdavConfig = true
             }
+            SettingActionRow(title: "Scan Sync QR".tl, actionTitle: "Scan".tl) {
+                errorMessage = nil
+                showSyncScanner = true
+            }
             syncModeRow
             retentionRow
             SettingToggleRow(
@@ -189,7 +210,7 @@ struct DataSyncSettingsSection: View {
         let choices = [3, 5, 10, 20]
         let current = AppData.shared.settings["webdavBackupRetention"].intValue ?? 10
         return Picker("Backups to keep per platform".tl, selection: Binding(
-            get: { current },
+            get: { AppData.shared.settings["webdavBackupRetention"].intValue ?? 10 },
             set: {
                 AppData.shared.settings["webdavBackupRetention"] = .int($0)
                 AppData.shared.saveData()
@@ -266,6 +287,42 @@ struct DataSyncSettingsSection: View {
         errorMessage = nil
     }
 
+    private func decodeSyncConfig(_ raw: String?, pin: String) {
+        guard let raw else { return }
+        showSyncPIN = false
+        Task.detached {
+            do {
+                let payload = try SyncConfigTransfer.decode(uri: raw, pin: pin)
+                await MainActor.run {
+                    scannedSyncURI = nil
+                    importedSyncPayload = payload
+                    showWebdavConfig = true
+                    message = "Sync configuration decoded. Review and save it.".tl
+                    errorMessage = nil
+                }
+            } catch let error as SyncConfigTransferError {
+                await MainActor.run {
+                    scannedSyncURI = nil
+                    errorMessage = syncConfigErrorMessage(error)
+                }
+            } catch {
+                await MainActor.run {
+                    scannedSyncURI = nil
+                    errorMessage = "The QR code is damaged or invalid".tl
+                }
+            }
+        }
+    }
+
+    private func syncConfigErrorMessage(_ error: SyncConfigTransferError) -> String {
+        switch error {
+        case .notSyncConfig: return "Not a sync config QR code".tl
+        case .unsupportedVersion: return "This QR code needs a newer app version".tl
+        case .malformed: return "The QR code is damaged or invalid".tl
+        case .wrongPinOrTampered: return "Wrong PIN, or the QR code was altered".tl
+        }
+    }
+
     private func testConnection() {
         isBusy = true
         Task {
@@ -321,6 +378,7 @@ struct DataSyncSettingsSection: View {
 
 /// WebDAV 配置表单（URL/用户名/密码 + 保存即首同步，对齐 _WebdavSetting）。
 struct WebdavConfigSheet: View {
+    let initialConfig: SyncConfigPayload?
     @State private var urlString = ""
     @State private var username = ""
     @State private var password = ""
@@ -329,6 +387,10 @@ struct WebdavConfigSheet: View {
     @State private var isBusy = false
     @State private var removeDataSyncObserver: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+
+    init(initialConfig: SyncConfigPayload? = nil) {
+        self.initialConfig = initialConfig
+    }
 
     var body: some View {
         NavigationStack {
@@ -367,7 +429,11 @@ struct WebdavConfigSheet: View {
     }
 
     private func load() {
-        if let config = DataSync.shared.config {
+        if let initialConfig {
+            urlString = initialConfig.url
+            username = initialConfig.user
+            password = initialConfig.pass
+        } else if let config = DataSync.shared.config {
             urlString = config.url
             username = config.user
             password = config.password
@@ -389,6 +455,10 @@ struct WebdavConfigSheet: View {
             return
         }
         AppData.shared.settings["webdav"] = .array(fields.map { .string($0) })
+        if let initialConfig {
+            DataSync.shared.setSyncMode(initialConfig.autoSync ? .realtime : .manual)
+            AppData.shared.settings["disableSyncFields"] = .string(initialConfig.disableSyncFields)
+        }
         AppData.shared.saveData()
         if DataSync.shared.syncMode == .manual {
             message = "Saved".tl

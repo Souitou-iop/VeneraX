@@ -15,6 +15,7 @@ struct ComicDetailsView: View {
     @State private var showDownloadSheet = false
     @State private var showRelatedSourcesSheet = false
     @State private var isChapterReversed: Bool = AppData.shared.settings["reverseChapterOrder"].boolValue ?? false
+    @State private var readerTarget: ReaderTarget?
 
     private func addToReadLater() {
         ReadLaterManager.shared.add(
@@ -127,7 +128,14 @@ struct ComicDetailsView: View {
         .sheet(isPresented: $showRelatedSourcesSheet) {
             RelatedSourcesSheet(comic: comic)
         }
-        .task { await load() }
+        .navigationDestination(item: $readerTarget) { target in
+            readerView(for: target)
+        }
+        .task {
+            if details == nil {
+                await load()
+            }
+        }
     }
 
     @ViewBuilder
@@ -266,11 +274,13 @@ struct ComicDetailsView: View {
                 let absIdx = absoluteChapterIndex(chapters, entryID: entry.id)
                 let isDownloaded = LocalManager.shared.isDownloaded(id: comic.id, type: comicType, ep: absIdx + 1, chapters: chapters)
                 let isRead = isChapterRead(chapters, entryID: entry.id)
-                NavigationLink(value: ReaderTarget(
-                    comic: comic,
-                    epIndex: absIdx,
-                    chapters: chapters
-                )) {
+                Button {
+                    readerTarget = ReaderTarget(
+                        comic: comic,
+                        epIndex: absIdx,
+                        chapters: chapters
+                    )
+                } label: {
                     HStack(spacing: 4) {
                         Text(verbatim: entry.title)
                             .font(.footnote.weight(.regular))
@@ -299,6 +309,17 @@ struct ComicDetailsView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func readerView(for target: ReaderTarget) -> some View {
+        if target.comic.sourceKey == "local" || ComicCollectionStore.isCollectionSourceKey(target.comic.sourceKey) {
+            ReaderView(comic: target.comic, source: nil, epIndex: target.epIndex, chapters: target.chapters)
+        } else if let source = AppServices.shared.sources.first(where: { $0.key == target.comic.sourceKey }) {
+            ReaderView(comic: target.comic, source: source, epIndex: target.epIndex, chapters: target.chapters)
+        } else {
+            ContentUnavailableView("Source not found".tl, systemImage: "exclamationmark.triangle")
         }
     }
 
@@ -339,6 +360,7 @@ struct ComicDetailsView: View {
     }
 
     private func load() async {
+        guard details == nil else { return }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -400,7 +422,13 @@ struct ComicDetailsView: View {
             details = try await source.loadComicInfo(id: comic.id)
             selectedGroup = details?.chapters?.groupNames.first
         } catch {
-            self.error = error.localizedDescription
+            // Keep an already loaded detail page visible if a lifecycle-triggered
+            // reload fails (for example, a transient source quota/403 response).
+            if details == nil {
+                self.error = error.localizedDescription
+            } else {
+                Log.warning("ComicDetails", "Refresh failed; keeping loaded details: \(error)")
+            }
         }
     }
 }
@@ -531,10 +559,12 @@ struct ChapterDownloadPickerSheet: View {
 }
 
 /// 阅读器导航目标（章节 id 展平序号）。
-struct ReaderTarget: Hashable {
+struct ReaderTarget: Hashable, Identifiable {
     let comic: Comic
     let epIndex: Int
     let chapters: ComicChapters?
+
+    var id: String { "\(comic.sourceKey):\(comic.id):\(epIndex)" }
 }
 
 /// 简单流式布局（iOS 16+ Layout 协议实现）。

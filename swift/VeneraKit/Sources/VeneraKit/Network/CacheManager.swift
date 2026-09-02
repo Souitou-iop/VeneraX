@@ -23,7 +23,8 @@ public final class CacheManager: @unchecked Sendable {
           dir TEXT NOT NULL,
           name TEXT NOT NULL,
           expires INTEGER NOT NULL,
-          type TEXT
+          type TEXT,
+          last_access INTEGER NOT NULL DEFAULT 0
         )
         """)
         currentSize = scanDirectory()
@@ -68,6 +69,10 @@ public final class CacheManager: @unchecked Sendable {
             try? db.execute("delete from cache where key = ?;", [.text(key)])
             return nil
         }
+        // Touch on hit so eviction is genuinely least-recently-used rather
+        // than oldest-expiry-first. Keep it inside the existing lock.
+        let now = Int(Date().timeIntervalSince1970)
+        try? db.execute("update cache set last_access = ? where key = ?;", [.int(now), .text(key)])
         return url
     }
 
@@ -108,9 +113,14 @@ public final class CacheManager: @unchecked Sendable {
         if let oldURL, oldURL.path != fileURL.path {
             try? FileManager.default.removeItem(at: oldURL)
         }
+        let accessTime = Int(Date().timeIntervalSince1970)
+        let values: [SQLiteValue] = [
+            .text(key), .text(dir), .text(name), .double(expires),
+            type.map { .text($0) } ?? .null, .int(accessTime)
+        ]
         try? db.execute("""
-        insert or replace into cache (key, dir, name, expires, type) values (?, ?, ?, ?, ?);
-        """, [.text(key), .text(dir), .text(name), .double(expires), type.map { .text($0) } ?? .null])
+        insert or replace into cache (key, dir, name, expires, type, last_access) values (?, ?, ?, ?, ?, ?);
+        """, values)
         currentSize = max(0, currentSize - oldSize + data.count)
         evictIfNeeded()
     }
@@ -154,14 +164,22 @@ public final class CacheManager: @unchecked Sendable {
         let limitMB = AppData.shared.settings["cacheSize"].intValue ?? 2048
         let limit = limitMB * 1024 * 1024
         guard currentSize > limit else { return }
-        let rows = (try? db.select("select key, dir, name, expires from cache order by expires asc;")) ?? []
+        let now = Int(Date().timeIntervalSince1970)
+        // Expired entries first; among live entries evict least recently used.
+        // Never-expiring entries sort last instead of starving expiring items.
+        let rows = (try? db.select("""
+            select key, dir, name, expires, last_access
+            from cache
+            order by
+              case when expires > 0 and expires <= \(now) then 0 else 1 end asc,
+              case when expires = 0 then 1 else 0 end asc,
+              last_access asc,
+              expires asc;
+            """)) ?? []
         for row in rows {
             guard currentSize > limit else { break }
             guard let key = row["key"]?.textValue, let dir = row["dir"]?.textValue, let name = row["name"]?.textValue else { continue }
-            let url = URL(fileURLWithPath: filePath(dir, name))
-            let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
             deleteUnlocked(key: key, dir: dir, name: name)
-            currentSize -= fileSize
         }
     }
 }

@@ -4,7 +4,7 @@ import VeneraKit
 /// 主框架：支持 iPhone 底部 TabView 与 iPad / Mac 宽屏 NavigationSplitView 侧边栏自适应（对齐原版多端响应式）。
 struct MainTabView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var tabSelection = AppData.shared.settings["initialPage"].intValue ?? 0
+    @State private var tabSelection = 0
     @State private var sidebarSelection: SidebarItem? = .home
 
     enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
@@ -99,6 +99,13 @@ struct MainTabView: View {
         }
         .modifier(SearchTabActivationModifier())
         .toolbarBackground(.visible, for: .tabBar)
+        .task {
+            tabSelection = initialPageSelection
+        }
+    }
+
+    private var initialPageSelection: Int {
+        min(max(AppData.shared.settings["initialPage"].intValue ?? 0, 0), 3)
     }
 
     /// iPad / Mac 宽屏布局：侧边栏 NavigationSplitView。
