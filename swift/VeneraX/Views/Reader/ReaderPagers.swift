@@ -232,15 +232,25 @@ struct ContinuousPageView: View {
             onTapToolbar()
         }
         .task(id: item.id) {
+            // 解码位图缓存命中：回滚到已看过的页直接复用解码+增强结果，
+            // 不再每轮整幅重新解码（Lazy stack 出屏即销毁视图状态）。
+            // 滤镜快照与缓存时不符（用户改了设置）则回退完整解码路径。
+            let parameters = ImageEnhancer.shared.currentParameters()
+            if let cached = model.decodedImage(for: item, parameters: parameters) {
+                image = cached
+                return
+            }
             image = nil
             guard let data = await model.continuousImageData(for: item), !Task.isCancelled else { return }
-            let parameters = ImageEnhancer.shared.currentParameters()
             let rendered = await Task.detached(priority: .userInitiated) {
                 guard let raw = UIImage(data: data) else { return nil as UIImage? }
                 return ImageEnhancer.shared.enhance(raw, parameters: parameters)
             }.value
             guard !Task.isCancelled else { return }
             image = rendered
+            if let rendered {
+                model.storeDecodedImage(rendered, for: item, parameters: parameters)
+            }
         }
     }
 }

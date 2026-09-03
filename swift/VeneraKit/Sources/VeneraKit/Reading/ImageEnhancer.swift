@@ -14,7 +14,7 @@ public final class ImageEnhancer: @unchecked Sendable {
 
     /// Immutable snapshot used by background image decoding. Reading settings is
     /// kept on the caller's actor; Core Image work can then run off the UI actor.
-    public struct Parameters: Sendable {
+    public struct Parameters: Sendable, Equatable {
         public let enabled: Bool
         public let strength: Double
         public let clarity: Double

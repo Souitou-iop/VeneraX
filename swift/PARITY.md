@@ -131,6 +131,6 @@
 | 随机抽漫画              | ✅  | 收藏候选池内本轮不重复，候选耗尽后自动开启新轮次                                                                |
 | 扫码导入同步配置           | 🚧 | 已接入原生 AVFoundation QR 扫描、PIN、Flutter 兼容 AES-GCM/PBKDF2 解码和 WebDAV 表单回填；模拟器无真实摄像头，需实体机验收 |
 | 缓存管理               | ✅  | 设置页缓存大小/清除（确认+后台+进度态）/上限（保存即淘汰 applyLimit）；CacheManager 命中 touch LRU、过期优先淘汰、DB size 列账目（锁外原子写不串行化）、后台启动扫描+孤儿清理（mtime 防误删，非 hash 布局文件不动） |
-| 性能画像 / 无障碍        | ⬜  | Instruments 量化审计与 Accessibility 检查仍未做                                                             |
+| 性能画像 / 无障碍        | 🚧 | 阅读器热点已优化（连续条目 O(1) 反向索引、修剪频率守卫、解码位图 LRU 缓存 64MB 带参数指纹）；Instruments 滚动帧率量化审计与 Accessibility 检查仍未做 |
 | AltStore 发布管线 + 图标 | ⬜  | <br />                                                                                  |
 

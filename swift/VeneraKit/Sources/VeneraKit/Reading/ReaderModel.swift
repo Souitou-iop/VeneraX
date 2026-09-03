@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 阅读器模型：图片页加载、预载、翻页模式、连续跨章无缝连读、每部漫画独立设置。
 /// 翻页模式对齐原版 ReaderMode（6 种：画廊 3 + 连续 3）。
@@ -147,6 +150,12 @@ public final class ReaderModel {
 
     /// 连续模式跨章条目列表
     public var continuousItems: [ContinuousPageItem] = []
+    /// id → continuousItems 下标。滚动路径上每个可见条目都要定位下标
+    /// （预取判定 + 缓存修剪），条目可达数千且每帧触发，线性扫描是滚动
+    /// 热点；维护反向索引把查找降到 O(1)。prepend 时整体平移，直接重建
+    /// （仅在加载上一章时发生）；append 增量插入。
+    @ObservationIgnored
+    private var continuousItemIndex: [String: Int] = [:]
     public private(set) var loadedChapterIndices: Set<Int> = []
     public var isLoadingNextChapter = false
     /// Used by the continuous pager to restore the first visible item after a
@@ -174,6 +183,24 @@ public final class ReaderModel {
     /// Decoded page bytes are intentionally bounded by both proximity and total cost.
     /// Large scans can make a small page count exceed hundreds of MB.
     private let decodedImageMemoryBudget = 96 * 1024 * 1024
+
+    // MARK: - 解码位图缓存（连续模式）
+    // 字节缓存只省网络/磁盘 IO；Lazy stack 出屏即销毁视图状态，回滚到
+    // 已看过的页仍要整轮重新解码+增强。此 LRU 缓存解码后位图，用像素
+    // 字节数（w*h*4）计成本，独立预算（与字节缓存分开计量）。
+    #if canImport(UIKit)
+    @ObservationIgnored
+    private var decodedBitmaps: [String: UIImage] = [:]
+    @ObservationIgnored
+    private var decodedBitmapCosts: [String: Int] = [:]
+    @ObservationIgnored
+    private var decodedBitmapParameterFingerprints: [String: ImageEnhancer.Parameters] = [:]
+    @ObservationIgnored
+    private var decodedBitmapOrder: [String] = [] // 插入序，淘汰从头删
+    @ObservationIgnored
+    private var decodedBitmapTotalCost = 0
+    private let decodedBitmapBudget = 64 * 1024 * 1024
+    #endif
 
     private var detailsChapters: ComicChapters?
 
@@ -238,8 +265,13 @@ public final class ReaderModel {
             }
         }
         continuousItems = []
+        continuousItemIndex = [:]
         loadedChapterIndices = []
         continuousLoadedImages = [:]
+        #if canImport(UIKit)
+        clearDecodedBitmaps()
+        #endif
+        lastContinuousTrimIndex = -1
 
         // 1. 本地导入漫画直读
         if comic.sourceKey == "local" {
@@ -306,6 +338,7 @@ public final class ReaderModel {
     private func setupContinuousItems(for ep: Int, pageList: [String]) {
         let title = chapterTitle(at: ep) ?? "Chapter \(ep + 1)"
         continuousItems = Self.continuousItems(for: ep, pageList: pageList, chapterTitle: title)
+        rebuildContinuousItemIndex()
         loadedChapterIndices.insert(ep)
         attemptedContinuousChapterIndices.insert(ep)
     }
@@ -334,10 +367,28 @@ public final class ReaderModel {
         if prepend {
             continuousAnchorToRestoreID = continuousItems.first?.id
             continuousItems.insert(contentsOf: newItems, at: 0)
+            // 前插使全部旧下标平移，重建（仅在加载上一章时发生，低频）。
+            rebuildContinuousItemIndex()
         } else {
+            let base = continuousItems.count
             continuousItems.append(contentsOf: newItems)
+            for (offset, item) in newItems.enumerated() {
+                continuousItemIndex[item.id] = base + offset
+            }
         }
         loadedChapterIndices.insert(ep)
+    }
+
+    private func rebuildContinuousItemIndex() {
+        continuousItemIndex.reserveCapacity(continuousItems.count)
+        for (offset, item) in continuousItems.enumerated() {
+            continuousItemIndex[item.id] = offset
+        }
+    }
+
+    /// O(1) 定位连续条目下标（滚动热路径）。
+    private func indexOfContinuousItem(id: String) -> Int? {
+        continuousItemIndex[id]
     }
 
     private func fetchChapterPages(_ ep: Int) async -> [String]? {
@@ -387,6 +438,10 @@ public final class ReaderModel {
         pages = []
         loadedImages.removeAll(keepingCapacity: true)
         continuousLoadedImages.removeAll(keepingCapacity: true)
+        #if canImport(UIKit)
+        clearDecodedBitmaps()
+        #endif
+        lastContinuousTrimIndex = -1
         currentIndex = 0
         await loadPages()
     }
@@ -406,7 +461,7 @@ public final class ReaderModel {
     }
 
     public func onContinuousItemVisible(_ item: ContinuousPageItem) {
-        guard let offset = continuousItems.firstIndex(where: { $0.id == item.id }) else { return }
+        guard let offset = indexOfContinuousItem(id: item.id) else { return }
         if currentEpIndex != item.epIndex {
             currentEpIndex = item.epIndex
             if let chPages = getChapterPages(for: item.epIndex) { pages = chPages }
@@ -643,8 +698,18 @@ public final class ReaderModel {
         loadedImages = retained
     }
 
+    /// 上次修剪时所在的下标。修剪半径远大于一帧滚过的条目数（12 vs 1），
+    /// 每个条目出现都全窗口重算既无必要又抬高频滚动成本；距上次位置
+    /// 不足 4 条时跳过，字节数学上仍在预算内（窗口最多晚 4 条收紧）。
+    @ObservationIgnored
+    private var lastContinuousTrimIndex: Int = -1
+
     private func trimContinuousImages(around itemID: String) {
-        guard let index = continuousItems.firstIndex(where: { $0.id == itemID }) else { return }
+        guard let index = indexOfContinuousItem(id: itemID) else { return }
+        if lastContinuousTrimIndex >= 0, abs(index - lastContinuousTrimIndex) < 4 {
+            return
+        }
+        lastContinuousTrimIndex = index
         let radius = max(preloadCount * 3, 12)
         let lower = max(0, index - radius)
         let upper = min(max(continuousItems.count - 1, 0), index + radius)
@@ -670,6 +735,57 @@ public final class ReaderModel {
         }
         continuousLoadedImages = retained
     }
+
+    // MARK: - 解码位图缓存 API（连续模式）
+
+    #if canImport(UIKit)
+    /// 命中已解码（含增强）位图直接返回，避免回滚时重复解码。parameters
+    /// 为本次渲染的滤镜快照，与缓存时不符（用户改了增强设置）则视为未
+    /// 命中，走完整解码路径。MainActor：模型主线程隔离，无跨线程竞争。
+    public func decodedImage(for item: ContinuousPageItem, parameters: ImageEnhancer.Parameters) -> UIImage? {
+        guard let image = decodedBitmaps[item.id],
+              decodedBitmapParameterFingerprints[item.id] == parameters else { return nil }
+        // 命中提升到淘汰序末尾（近似 LRU）。
+        if let position = decodedBitmapOrder.firstIndex(of: item.id) {
+            decodedBitmapOrder.remove(at: position)
+            decodedBitmapOrder.append(item.id)
+        }
+        return image
+    }
+
+    /// 存入解码位图并执行预算淘汰。成本按像素字节（w*h*4）估算——
+    /// 解码后位图的真实内存占用，而非压缩字节。
+    public func storeDecodedImage(_ image: UIImage, for item: ContinuousPageItem, parameters: ImageEnhancer.Parameters) {
+        let pixelCost = Int(image.size.width) * Int(image.size.height) * 4
+        if decodedBitmaps[item.id] == nil {
+            decodedBitmaps[item.id] = image
+            decodedBitmapCosts[item.id] = pixelCost
+            decodedBitmapParameterFingerprints[item.id] = parameters
+            decodedBitmapTotalCost += pixelCost
+            decodedBitmapOrder.append(item.id)
+            evictDecodedBitmapsIfNeeded()
+        }
+    }
+
+    private func evictDecodedBitmapsIfNeeded() {
+        while decodedBitmapTotalCost > decodedBitmapBudget, !decodedBitmapOrder.isEmpty {
+            let oldest = decodedBitmapOrder.removeFirst()
+            if let cost = decodedBitmapCosts.removeValue(forKey: oldest) {
+                decodedBitmapTotalCost -= cost
+            }
+            decodedBitmaps.removeValue(forKey: oldest)
+            decodedBitmapParameterFingerprints.removeValue(forKey: oldest)
+        }
+    }
+
+    private func clearDecodedBitmaps() {
+        decodedBitmaps = [:]
+        decodedBitmapCosts = [:]
+        decodedBitmapParameterFingerprints = [:]
+        decodedBitmapOrder = []
+        decodedBitmapTotalCost = 0
+    }
+    #endif
 
     private func schedulePreload(_ index: Int) {
         guard pages.indices.contains(index), loadedImages[index] == nil, preloadTasks[index] == nil else { return }
