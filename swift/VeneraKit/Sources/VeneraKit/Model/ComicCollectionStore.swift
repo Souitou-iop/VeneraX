@@ -170,6 +170,13 @@ public final class ComicCollectionStore: @unchecked Sendable {
     public static let shared = ComicCollectionStore()
 
     public static let settingsKey = "comicCollections"
+
+    /// 封面图目录名（对齐原版 coverDirName）：配置只存文件名，文件本体
+    /// 经 `.venera` 备份以 `collection_covers/<文件名>` 成员中继。
+    public static let coverDirName = "collection_covers"
+
+    /// 本地封面标记（对齐原版 localCoverScheme）：`collection://<文件名>`。
+    public static let localCoverScheme = "collection://"
     public let onChange = CallbackRegistry<Void>()
 
     private let lock = NSLock()

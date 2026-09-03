@@ -462,8 +462,33 @@ public final class DataSync: @unchecked Sendable {
         if includeLocalComics && FileIO.exists(AppPaths.join(dataPath, "local.db")) {
             entries.append("local.db")
         }
+        // Flutter 协议：压缩包内设置成员固定命名为 appdata.json（原版
+        // `zipFile.addFile("appdata.json", appdataFile)`，即使磁盘源文件是
+        // syncdata.json）。此前导出为 syncdata.json 成员，Flutter 端导入
+        // 只认 appdata.json，导致设置在 Swift→Flutter 方向被静默跳过。
         entries.append(sync ? "syncdata.json" : "appdata.json")
-        entries.append("source_type_map.json")
+        // 中继文件：本端无对应子系统（domain 库 / 图片翻译），但必须原样
+        // 带回，Flutter↔Flutter 多设备链路经过 Swift 设备时数据才不丢
+        // （对齐原版「存在即打包」的存在性守卫）。
+        for relay in ["image_translation.db", "image_translation_prefs.json", "data/venera.db"] {
+            if FileIO.exists(AppPaths.join(dataPath, relay)) {
+                entries.append(relay)
+            }
+        }
+        // 合集封面（对齐原版 coverDir 打包）：配置在 appdata.json 里只存文件名
+        // （collection://<名>），文件本体以 collection_covers/<名> 成员中继，
+        // 否则另一台设备的合集封面指向空文件。隐藏文件（.DS_Store 等）不带。
+        let coverDir = AppPaths.join(dataPath, ComicCollectionStore.coverDirName)
+        if let coverFiles = try? FileManager.default.contentsOfDirectory(atPath: coverDir) {
+            for file in coverFiles where !file.hasPrefix(".") {
+                entries.append("\(ComicCollectionStore.coverDirName)/\(file)")
+            }
+        }
+        // source_type_map.json：注册表非空才打包（对齐原版条件）。
+        let registry = SourcePlatformResolver.shared.snapshot()
+        if !registry.isEmpty {
+            entries.append("source_type_map.json")
+        }
 
         // 漫画源脚本与数据
         let sourceDirectory = AppPaths.comicSourcePath
@@ -477,16 +502,19 @@ public final class DataSync: @unchecked Sendable {
         guard let archive = try? Archive(url: archiveURL, accessMode: .create, preferredEncoding: .utf8) else {
             throw SyncError.invalidArchive
         }
-        // source_type_map.json 先行生成
-        let registry = SourcePlatformResolver.shared.snapshot()
-        var registryMap: [String: JSON] = [:]
-        for (intKey, sourceKey) in registry {
-            registryMap[String(intKey)] = .string(sourceKey)
+        // source_type_map.json 先行生成到暂存目录。内容包裹在 "types" 键下
+        // （对齐原版 jsonEncode({'types': sourceTypeRegistry})，否则 Flutter
+        // 端读取 data['types'] 得到空映射）。
+        if !registry.isEmpty {
+            var registryMap: [String: JSON] = [:]
+            for (intKey, sourceKey) in registry {
+                registryMap[String(intKey)] = .string(sourceKey)
+            }
+            try? FileIO.writeStringAtomic(
+                temporary.appendingPathComponent("source_type_map.json").path,
+                (try? JSON.object(["types": .object(registryMap)]).encodedString()) ?? "{}"
+            )
         }
-        try? FileIO.writeStringAtomic(
-            temporary.appendingPathComponent("source_type_map.json").path,
-            (try? JSON.object(registryMap).encodedString()) ?? "{}"
-        )
 
         for entry in entries {
             let relativePath: String
@@ -495,8 +523,13 @@ public final class DataSync: @unchecked Sendable {
                 relativePath = entry
                 absolutePath = AppPaths.join(sourceDirectory, String(entry.dropFirst("comic_source/".count)))
             } else if entry == "syncdata.json" || entry == "appdata.json" {
-                relativePath = entry
+                // zip 成员名固定为 appdata.json（Flutter 协议），磁盘源文件按模式取。
+                relativePath = "appdata.json"
                 absolutePath = AppPaths.join(dataPath, entry)
+            } else if entry == "source_type_map.json" {
+                // 生成于暂存目录而非 dataPath（此前按 dataPath 解析导致永远跳过）。
+                relativePath = entry
+                absolutePath = temporary.appendingPathComponent(entry).path
             } else {
                 relativePath = entry
                 absolutePath = AppPaths.join(dataPath, entry)
@@ -523,7 +556,9 @@ public final class DataSync: @unchecked Sendable {
 
         var dbFiles: [String: String] = [:]
         var sourceFiles: [String: String] = [:]
+        var relayFiles: [String: String] = [:]
         var settingsJSON: JSON?
+        var importedCovers = false
 
         for entry in archive where entry.type == .file {
             let name = entry.path
@@ -539,19 +574,40 @@ public final class DataSync: @unchecked Sendable {
                 // contain local.db, but an opted-out device must not replace its
                 // own local library manifest (Flutter restoreLocalComics).
                 if name == "local.db" && !restoreLocalComics { continue }
+                // 中继文件：本端无对应子系统（domain 库 / 图片翻译），原样
+                // 落盘保存、导出时带回，保证多设备链路经过 Swift 不断。
+                if name == "data/venera.db" || name == "image_translation.db" {
+                    relayFiles[AppPaths.join(AppPaths.dataPath, name)] = path
+                    continue
+                }
                 guard ["history.db", "local_favorite.db", "local.db", "read_later.db", "cookie.db"].contains(name) else { continue }
                 dbFiles[AppPaths.join(AppPaths.dataPath, name)] = path
             } else if name.hasPrefix("comic_source/") {
                 sourceFiles[name] = path
+            } else if name.hasPrefix("\(ComicCollectionStore.coverDirName)/") {
+                // 合集封面中继：配置只存文件名，文件本体原样落盘供解析。
+                relayFiles[AppPaths.join(AppPaths.dataPath, name)] = path
+                importedCovers = true
             } else if name == "syncdata.json" || name == "appdata.json" {
                 if let text = try? String(contentsOfFile: path, encoding: .utf8) {
                     settingsJSON = JSON.decode(text)
                 }
+            } else if name == "image_translation_prefs.json" {
+                // 同上：中继保留（原内容为 per-comic 图片翻译偏好）。
+                relayFiles[AppPaths.join(AppPaths.dataPath, name)] = path
             } else if name == "source_type_map.json" {
                 if let text = try? String(contentsOfFile: path, encoding: .utf8),
                    let json = JSON.decode(text), case .object(let map) = json
                 {
-                    let registry = map.compactMap { key, value -> (Int, String)? in
+                    // 原版格式为 {"types": {intKey: sourceKey}}；平铺形式仅为
+                    // 本端旧导出的防御性回退。
+                    let rawTypes: [String: JSON]
+                    if case .object(let wrapped)? = map["types"] {
+                        rawTypes = wrapped
+                    } else {
+                        rawTypes = map
+                    }
+                    let registry = rawTypes.compactMap { key, value -> (Int, String)? in
                         guard let intKey = Int(key), let sourceKey = value.stringValue else { return nil }
                         return (intKey, sourceKey)
                     }
@@ -576,10 +632,36 @@ public final class DataSync: @unchecked Sendable {
                 FileIO.deleteIgnoringErrors(destination)
                 try? FileManager.default.copyItem(atPath: source, toPath: destination)
             }
+            // 中继文件原样落盘（含 data/venera.db 的子目录创建）
+            for (destination, source) in relayFiles {
+                let directory = (destination as NSString).deletingLastPathComponent
+                try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                FileIO.deleteIgnoringErrors(destination)
+                try? FileManager.default.copyItem(atPath: source, toPath: destination)
+            }
             if let settingsJSON {
                 AppData.shared.syncData(settingsJSON)
             } else {
                 AppData.shared.saveData(sync: false)
+            }
+            // 合集封面剪枝（对齐原版「复制后按新配置清理」）：settings 刚被
+            // 应用，合集列表已是新配置；不再被任何 customCover 引用的封面
+            // 文件是另一台设备弃用的死数据，不清会随每次同步永久堆积。
+            // 仅当备份携带封面目录时执行（无封面成员的备份不触碰本地封面）。
+            if importedCovers {
+                var referenced = Set<String>()
+                for collection in ComicCollectionStore.shared.all() {
+                    let cover = collection.customCover.trimmingCharacters(in: .whitespaces)
+                    if cover.hasPrefix(ComicCollectionStore.localCoverScheme) {
+                        referenced.insert(String(cover.dropFirst(ComicCollectionStore.localCoverScheme.count)))
+                    }
+                }
+                let targetDir = AppPaths.join(AppPaths.dataPath, ComicCollectionStore.coverDirName)
+                if let files = try? FileManager.default.contentsOfDirectory(atPath: targetDir) {
+                    for file in files where !referenced.contains(file) {
+                        FileIO.deleteIgnoringErrors(AppPaths.join(targetDir, file))
+                    }
+                }
             }
             if dbFiles.keys.contains(where: { $0.hasSuffix("local.db") }) {
                 LocalManager.shared.ensureSchema()
