@@ -19,6 +19,10 @@ struct ComicDetailsView: View {
     /// 「隐藏重复章节」开关（每部漫画、设备本地，对齐原版 ChapterDuplicatePrefs）。
     @State private var hideDuplicateChapters = false
     @State private var duplicateChapterIndices: Set<Int> = []
+    /// 预翻译选章弹窗状态。
+    @State private var showPreTranslationSheet = false
+    @State private var preTranslationComic: Comic?
+    @State private var preTranslationChapters: ComicChapters?
 
     private func refreshDuplicateChapterState() {
         hideDuplicateChapters = ChapterDuplicatePrefs.isHidden(comicId: comic.id, sourceKey: comic.sourceKey)
@@ -120,6 +124,19 @@ struct ComicDetailsView: View {
                             Label("Search in other sources".tl, systemImage: "arrow.triangle.branch")
                         }
                     }
+
+                    // 预翻译入口：需要源可用且开启图片翻译（对齐原版 pre-translation）。
+                    if let source, let details, let chapters = details.chapters, !chapters.isEmpty,
+                       AppData.shared.settings["enableImageTranslation"].boolValue ?? false {
+                        Button {
+                            preTranslationComic = comic
+                            preTranslationChapters = chapters
+                            showPreTranslationSheet = true
+                        } label: {
+                            Label("Pre-translate chapters".tl, systemImage: "character.book.closed")
+                        }
+                        .disabled(PreTranslationTaskManager.shared.allTasks().contains(where: \.isRunning))
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -135,6 +152,11 @@ struct ComicDetailsView: View {
         }
         .sheet(isPresented: $showRelatedSourcesSheet) {
             RelatedSourcesSheet(comic: comic)
+        }
+        .sheet(isPresented: $showPreTranslationSheet) {
+            if let comic = preTranslationComic, let chapters = preTranslationChapters {
+                PreTranslationPickerSheet(comic: comic, chapters: chapters)
+            }
         }
         .navigationDestination(item: $readerTarget) { target in
             readerView(for: target)
@@ -613,6 +635,93 @@ struct ReaderTarget: Hashable, Identifiable {
     let chapters: ComicChapters?
 
     var id: String { "\(comic.sourceKey):\(comic.id):\(epIndex)" }
+}
+
+/// 预翻译选章弹窗（对齐原版 pre-translation 的章节选择入口）。
+/// 选择章节后台预译，写入阅读器同一缓存键——阅读时即时呈现。
+struct PreTranslationPickerSheet: View {
+    let comic: Comic
+    let chapters: ComicChapters
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIndices: Set<Int> = []
+    @State private var runningTaskExists = PreTranslationTaskManager.shared.allTasks().contains(where: \.isRunning)
+
+    private var source: ComicSource? {
+        ComicSourceManager.shared.find(comic.sourceKey)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Button("Select All".tl) { selectedIndices = Set(chapters.ids.indices) }
+                        Spacer()
+                        Button("Invert".tl) { invertSelection() }
+                        Spacer()
+                        Button("Clear".tl) { selectedIndices.removeAll() }
+                    }
+                    .font(.footnote)
+                    .buttonStyle(.borderless)
+                }
+
+                Section("Chapters".tl) {
+                    ForEach(chapters.ids.indices, id: \.self) { index in
+                        HStack {
+                            Text(verbatim: chapters.titles.indices.contains(index) ? chapters.titles[index] : "Chapter \(index + 1)")
+                            Spacer()
+                            Image(systemName: selectedIndices.contains(index) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selectedIndices.contains(index) ? .blue : .secondary)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if selectedIndices.contains(index) {
+                                selectedIndices.remove(index)
+                            } else {
+                                selectedIndices.insert(index)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Pre-translate Chapters".tl)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel".tl) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Translate (\(selectedIndices.count))".tl) {
+                        startPreTranslation()
+                        dismiss()
+                    }
+                    .disabled(selectedIndices.isEmpty || runningTaskExists)
+                }
+            }
+        }
+    }
+
+    private func invertSelection() {
+        selectedIndices = Set(chapters.ids.indices).subtracting(selectedIndices)
+    }
+
+    private func startPreTranslation() {
+        guard let source else {
+            AppServices.shared.showMessage("Source not found".tl)
+            return
+        }
+        if PreTranslationTaskManager.shared.start(
+            comic: comic,
+            source: source,
+            chapters: chapters,
+            epIndices: Array(selectedIndices)
+        ) != nil {
+            AppServices.shared.showMessage("Pre-translation started".tl)
+        } else {
+            AppServices.shared.showMessage("A pre-translation task is already running".tl)
+        }
+    }
 }
 
 /// 简单流式布局（iOS 16+ Layout 协议实现）。

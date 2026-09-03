@@ -11,6 +11,7 @@ struct TasksView: View {
     @State private var downloadTasks: [DownloadTask] = []
     @State private var dataSyncTasks: [DataSyncTask] = []
     @State private var comicExportTasks: [LocalComicExportTask] = []
+    @State private var preTranslationTasks: [PreTranslationTask] = []
     @State private var comicExportPendingCancellation: LocalComicExportTask?
     @State private var showMigrationSheet = false
     @State private var showClearHistoryConfirmation = false
@@ -20,6 +21,7 @@ struct TasksView: View {
     @State private var removeSourceUpdateObserver: (() -> Void)?
     @State private var removeDataSyncObserver: (() -> Void)?
     @State private var removeComicExportObserver: (() -> Void)?
+    @State private var removePreTranslationObserver: (() -> Void)?
     @State private var taskPendingCancellation: SourceMigrationManager.MigrationTask?
     @State private var followPendingCancellation: FollowUpdateTask?
     @State private var sourceUpdatePendingCancellation: SourceUpdateTask?
@@ -98,6 +100,11 @@ struct TasksView: View {
                     Task { @MainActor in reload() }
                 }
             }
+            if removePreTranslationObserver == nil {
+                removePreTranslationObserver = PreTranslationTaskManager.shared.onChange.add { _ in
+                    Task { @MainActor in reload() }
+                }
+            }
         }
         .onDisappear {
             removeDownloadObserver?()
@@ -112,6 +119,8 @@ struct TasksView: View {
             removeDataSyncObserver = nil
             removeComicExportObserver?()
             removeComicExportObserver = nil
+            removePreTranslationObserver?()
+            removePreTranslationObserver = nil
         }
         .confirmationDialog("Clear Task History?".tl, isPresented: $showClearHistoryConfirmation, titleVisibility: .visible) {
             Button("Clear History".tl, role: .destructive) {
@@ -120,6 +129,7 @@ struct TasksView: View {
                 SourceUpdateManager.shared.clearHistory()
                 DataSyncManager.shared.clearHistory()
                 LocalComicExportManager.shared.clearHistory()
+                PreTranslationTaskManager.shared.clearHistory()
                 reload()
             }
             Button("Cancel".tl, role: .cancel) {}
@@ -193,7 +203,7 @@ struct TasksView: View {
     }
 
     private var hasHistory: Bool {
-        !finishedTasks.isEmpty || !finishedFollowTasks.isEmpty || !finishedSourceUpdateTasks.isEmpty || !finishedDataSyncTasks.isEmpty || !finishedComicExportTasks.isEmpty
+        !finishedTasks.isEmpty || !finishedFollowTasks.isEmpty || !finishedSourceUpdateTasks.isEmpty || !finishedDataSyncTasks.isEmpty || !finishedComicExportTasks.isEmpty || !finishedPreTranslationTasks.isEmpty
     }
 
     private var runningTasks: [SourceMigrationManager.MigrationTask] {
@@ -230,10 +240,12 @@ struct TasksView: View {
 
     private var runningComicExportTasks: [LocalComicExportTask] { comicExportTasks.filter(\.isRunning) }
     private var finishedComicExportTasks: [LocalComicExportTask] { comicExportTasks.filter { !$0.isRunning } }
+    private var runningPreTranslationTasks: [PreTranslationTask] { preTranslationTasks.filter(\.isRunning) }
+    private var finishedPreTranslationTasks: [PreTranslationTask] { preTranslationTasks.filter { !$0.isRunning } }
 
     private var runningList: some View {
         Group {
-            if runningTasks.isEmpty && runningFollowTasks.isEmpty && runningSourceUpdateTasks.isEmpty && runningDataSyncTasks.isEmpty && runningComicExportTasks.isEmpty && downloadTasks.isEmpty {
+            if runningTasks.isEmpty && runningFollowTasks.isEmpty && runningSourceUpdateTasks.isEmpty && runningDataSyncTasks.isEmpty && runningComicExportTasks.isEmpty && runningPreTranslationTasks.isEmpty && downloadTasks.isEmpty {
                 ContentUnavailableView {
                     Label("No Running Tasks".tl, systemImage: "checkmark.circle")
                 } description: {
@@ -282,6 +294,11 @@ struct TasksView: View {
                             ForEach(runningComicExportTasks) { task in comicExportTaskCard(task) }
                         }
                     }
+                    if !runningPreTranslationTasks.isEmpty {
+                        Section("Pre-translation".tl) {
+                            ForEach(runningPreTranslationTasks) { task in preTranslationTaskCard(task) }
+                        }
+                    }
                 }
             }
         }
@@ -289,7 +306,7 @@ struct TasksView: View {
 
     private var historyList: some View {
         Group {
-            if finishedTasks.isEmpty && finishedFollowTasks.isEmpty && finishedSourceUpdateTasks.isEmpty && finishedDataSyncTasks.isEmpty && finishedComicExportTasks.isEmpty {
+            if finishedTasks.isEmpty && finishedFollowTasks.isEmpty && finishedSourceUpdateTasks.isEmpty && finishedDataSyncTasks.isEmpty && finishedComicExportTasks.isEmpty && finishedPreTranslationTasks.isEmpty {
                 ContentUnavailableView {
                     Label("No Task History".tl, systemImage: "clock")
                 } description: {
@@ -310,6 +327,7 @@ struct TasksView: View {
                         dataSyncTaskCard(task)
                     }
                     ForEach(finishedComicExportTasks) { task in comicExportTaskCard(task) }
+                    ForEach(finishedPreTranslationTasks) { task in preTranslationTaskCard(task) }
                 }
             }
         }
@@ -581,6 +599,51 @@ struct TasksView: View {
     }
 
     @ViewBuilder
+    private func preTranslationTaskCard(_ task: PreTranslationTask) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Pre-translation".tl, systemImage: "character.book.closed")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(task.status.rawValue.capitalized)
+                    .font(.caption2)
+                    .foregroundStyle(task.status == .failed ? .red : .secondary)
+            }
+            Text(verbatim: task.title).font(.caption).foregroundStyle(.secondary)
+            if task.isRunning, !task.phase.isEmpty {
+                Text(verbatim: task.phase).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
+            HStack {
+                Text("\(task.chapters.count) · \(task.done + task.failed)/\(task.total)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                if task.failed > 0 {
+                    Text("\("Failed".tl): \(task.failed)")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            ProgressView(value: task.progress)
+            HStack {
+                if task.isRunning {
+                    Button("Cancel".tl, role: .destructive) {
+                        PreTranslationTaskManager.shared.cancel(id: task.id)
+                    }
+                    .font(.caption)
+                } else if task.hasFailures {
+                    Button("Retry failed pages".tl) {
+                        PreTranslationTaskManager.shared.retryFailed(id: task.id)
+                    }
+                    .font(.caption)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
     private func dataSyncStatusBadge(_ status: DataSyncTask.Status) -> some View {
         switch status {
         case .running:
@@ -603,6 +666,7 @@ struct TasksView: View {
         sourceUpdateTasks = SourceUpdateManager.shared.allTasks()
         dataSyncTasks = DataSyncManager.shared.allTasks()
         comicExportTasks = LocalComicExportManager.shared.allTasks()
+        preTranslationTasks = PreTranslationTaskManager.shared.allTasks()
         downloadTasks = DownloadManager.shared.downloadingTasks
     }
 }
