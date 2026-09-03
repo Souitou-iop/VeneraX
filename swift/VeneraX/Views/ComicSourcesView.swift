@@ -179,17 +179,20 @@ struct ComicSourcesView: View {
                         let currentSource = sources.first { $0.key == item.key }
                         let hasUpdate = isInstalled && currentSource != nil && SourceCatalogManager.shared.compareVersions(item.version, currentSource!.version) > 0
 
-                        HStack {
+                        HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(verbatim: item.name)
                                     .font(.subheadline)
                                     .fontWeight(.semibold)
 
                                 if !item.description.isEmpty {
+                                    // 不限行数（对齐原版 fix: show full description
+                                    // in available plugin list）：截断的描述让用户
+                                    // 看不到插件实际功能；行数增多时动作按钮仍
+                                    // 顶部对齐在标题旁。
                                     Text(verbatim: item.description)
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(2)
                                 }
 
                                 HStack(spacing: 6) {

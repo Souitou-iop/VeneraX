@@ -141,15 +141,29 @@ struct ComicCollectionEditSheet: View {
 
                 if !members.isEmpty {
                     Section("Members".tl) {
-                        ForEach(members) { member in
+                        ForEach($members) { $member in
                             HStack {
                                 ComicCover(url: member.cachedCover)
                                     .frame(width: 36, height: 48)
                                     .clipShape(RoundedRectangle(cornerRadius: 4))
 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(verbatim: member.label)
+                                    // 「分部标签」布局下可为每个成员命名 tab
+                                    // （对齐原版 feat: edit tab names when adding
+                                    // to a collection）：留空则 label 回退到成员
+                                    // 标题，标题刷新时标签跟着变。
+                                    if displayMode == .tabs {
+                                        TextField(
+                                            "Tab name".tl,
+                                            text: $member.displayName,
+                                            prompt: Text("Leave empty to use the comic's title".tl)
+                                        )
+                                        .textFieldStyle(.roundedBorder)
                                         .font(.subheadline)
+                                    } else {
+                                        Text(verbatim: member.label)
+                                            .font(.subheadline)
+                                    }
                                     Text(verbatim: member.sourceKey)
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)

@@ -9,37 +9,43 @@ struct ContinuousPager: View {
     var onTapToolbar: () -> Void = {}
 
     var body: some View {
-        ScrollViewReader { proxy in
-            Group {
-                if model.mode == .continuousTopToBottom {
-                    ScrollView(.vertical) { items }
-                } else {
-                    ScrollView(.horizontal) { items }
-                        .environment(\.layoutDirection, model.mode.isRightToLeft ? .rightToLeft : .leftToRight)
+        // 视口尺寸取自 GeometryReader 而非 UIScreen.main.bounds（对齐原版
+        // #252 的 MediaQuery.sizeOf 修复）：UIScreen.main 已废弃，iPad 分屏/
+        // Stage Manager 下窗口 ≠ 屏幕尺寸，且旋转期间其 bounds 更新不保证
+        // 触发重排，页面帧会停留在旧布局尺寸。GeometryReader 随容器实时变化。
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                Group {
+                    if model.mode == .continuousTopToBottom {
+                        ScrollView(.vertical) { items(viewport: geometry.size) }
+                    } else {
+                        ScrollView(.horizontal) { items(viewport: geometry.size) }
+                            .environment(\.layoutDirection, model.mode.isRightToLeft ? .rightToLeft : .leftToRight)
+                    }
                 }
-            }
-            .onChange(of: model.continuousAnchorToRestoreID) { _, anchorID in
-                guard let anchorID else { return }
-                let anchor: UnitPoint = model.mode == .continuousTopToBottom ? .top : .leading
-                withTransaction(Transaction()) {
-                    proxy.scrollTo(anchorID, anchor: anchor)
+                .onChange(of: model.continuousAnchorToRestoreID) { _, anchorID in
+                    guard let anchorID else { return }
+                    let anchor: UnitPoint = model.mode == .continuousTopToBottom ? .top : .leading
+                    withTransaction(Transaction()) {
+                        proxy.scrollTo(anchorID, anchor: anchor)
+                    }
+                    _ = model.consumeContinuousAnchorToRestoreID()
                 }
-                _ = model.consumeContinuousAnchorToRestoreID()
             }
         }
     }
 
     @ViewBuilder
-    private var items: some View {
+    private func items(viewport: CGSize) -> some View {
         if model.mode == .continuousTopToBottom {
-            LazyVStack(spacing: 0) { pageItems }
+            LazyVStack(spacing: 0) { pageItems(viewport: viewport) }
         } else {
-            LazyHStack(spacing: 0) { pageItems }
+            LazyHStack(spacing: 0) { pageItems(viewport: viewport) }
         }
     }
 
     @ViewBuilder
-    private var pageItems: some View {
+    private func pageItems(viewport: CGSize) -> some View {
         ForEach(model.continuousItems) { item in
             if item.isChapterHeader {
                 Text(verbatim: item.chapterTitle ?? "")
@@ -55,10 +61,7 @@ struct ContinuousPager: View {
                 ) {
                     ContinuousPageView(model: model, item: item, onTapToolbar: onTapToolbar)
                 }
-                .frame(
-                    width: model.mode == .continuousTopToBottom ? UIScreen.main.bounds.width : UIScreen.main.bounds.width,
-                    height: UIScreen.main.bounds.height
-                )
+                .frame(width: viewport.width, height: viewport.height)
                 .onAppear { model.onContinuousItemVisible(item) }
             }
         }

@@ -541,7 +541,13 @@ public final class ArchiveDownloadTask: DownloadTask, @unchecked Sendable {
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            // 归档下载走 app 网络设置（代理/忽略坏证书）而非 URLSession.shared
+            // （对齐原版 fix: honor proxy and certificate settings on file
+            // downloads）；async data(from:) 随 Task 取消中止传输，暂停不再
+            // 让整包在后台跑完。
+            let session = HTTPClient.makeDownloadSession()
+            defer { session.finishTasksAndInvalidate() }
+            let (data, response) = try await session.data(from: url)
             guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
                 setError("Download failed")
                 return

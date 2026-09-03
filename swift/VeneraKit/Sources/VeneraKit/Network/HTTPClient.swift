@@ -24,16 +24,8 @@ public final class HTTPClient: @unchecked Sendable {
         configuration.timeoutIntervalForResource = 120
         configuration.httpShouldSetCookies = false // cookie 由 CookieStore 注入
         configuration.httpMaximumConnectionsPerHost = 8
-        let proxy = HTTPClient.customProxySetting()
-        if let proxy {
-            configuration.connectionProxyDictionary = [
-                kCFNetworkProxiesHTTPEnable as String: true,
-                kCFNetworkProxiesHTTPProxy as String: proxy.host,
-                kCFNetworkProxiesHTTPPort as String: proxy.port,
-                "HTTPSEnable": true,
-                "HTTPSProxy": proxy.host,
-                "HTTPSPort": proxy.port,
-            ]
+        if let proxy = Self.customProxySetting() {
+            configuration.connectionProxyDictionary = Self.proxyDictionary(for: proxy)
         }
         let delegate = ProxyDelegate(ignoreBadCertificate: ignoreBadCertificate)
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
@@ -45,6 +37,38 @@ public final class HTTPClient: @unchecked Sendable {
         let parts = setting.split(separator: ":").map(String.init)
         guard parts.count >= 2, let port = Int(parts[1]) else { return nil }
         return (parts[0], port)
+    }
+
+    private static func proxyDictionary(for proxy: (host: String, port: Int)) -> [String: Any] {
+        [
+            kCFNetworkProxiesHTTPEnable as String: true,
+            kCFNetworkProxiesHTTPProxy as String: proxy.host,
+            kCFNetworkProxiesHTTPPort as String: proxy.port,
+            "HTTPSEnable": true,
+            "HTTPSProxy": proxy.host,
+            "HTTPSPort": proxy.port,
+        ]
+    }
+
+    /// 大文件下载会话（对齐原版 createIOHttpClient）：应用代理与忽略坏证书
+    /// 设置，但不设短资源超时——归档/模型等大传输经 URLSession.shared 时既
+    /// 不走代理也不忽略坏证书，MITM 代理下必然 CERTIFICATE_VERIFY_FAILED。
+    /// 调用方用完应 finishTasksAndInvalidate。async data(for:) 随 Task 取消
+    /// 中止传输（对齐原版「取消转发到传输层」）。
+    public static func makeDownloadSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        // timeoutIntervalForResource 保持默认（7 天），大文件传输不受限。
+        configuration.httpMaximumConnectionsPerHost = 8
+        if let proxy = customProxySetting() {
+            configuration.connectionProxyDictionary = proxyDictionary(for: proxy)
+        }
+        let ignoreBadCertificate = AppData.shared.settings["ignoreBadCertificate"].boolValue ?? false
+        return URLSession(
+            configuration: configuration,
+            delegate: ProxyDelegate(ignoreBadCertificate: ignoreBadCertificate),
+            delegateQueue: nil
+        )
     }
 
     public func request(

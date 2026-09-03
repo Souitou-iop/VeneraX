@@ -118,7 +118,10 @@ struct FavoriteActionSheet: View {
         let member = CollectionMember(
             sourceKey: comic.sourceKey,
             comicId: comic.id,
-            displayName: comic.title,
+            // 未显式命名时不存储标签名（对齐原版 feat: edit tab names when
+            // adding to a collection）：留空让 label 回退到 cachedTitle，之后
+            // 详情加载刷新标题时标签跟着变；存标题则永远冻结在加入那一刻。
+            displayName: "",
             cachedTitle: comic.title,
             cachedSubtitle: comic.subtitle,
             cachedCover: comic.cover
