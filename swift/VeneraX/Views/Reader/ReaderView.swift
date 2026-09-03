@@ -13,6 +13,8 @@ struct ReaderView: View {
     @State private var isAutoPageTurning = false
     @State private var showChapterComments = false
     @State private var isOnChapterCommentsPage = false
+    @State private var showPageJumpDialog = false
+    @State private var pageJumpInput = ""
     @Environment(\.dismiss) private var dismiss
 
     private var timeTracker: ReadingTimeTracker
@@ -105,6 +107,18 @@ struct ReaderView: View {
                     )
                 }
             }
+        }
+        // 跳页对话框（对齐上游 v2.3.0：显示总页数，输入自动钳制到有效范围）。
+        .alert("Jump to page".tl, isPresented: $showPageJumpDialog) {
+            TextField("Page number".tl, text: $pageJumpInput)
+                .keyboardType(.numberPad)
+            Button("Cancel".tl, role: .cancel) {}
+            Button("Jump".tl) {
+                guard let page = Int(pageJumpInput.trimmingCharacters(in: .whitespaces)) else { return }
+                Task { await model.jumpToPage(page) }
+            }
+        } message: {
+            Text(verbatim: "\("Total pages".tl): \(model.totalPages) (1-\(model.totalPages))")
         }
     }
 
@@ -236,11 +250,21 @@ struct ReaderView: View {
             .frame(minWidth: 90)
             .padding(.horizontal, 10)
 
-            Text(verbatim: "\(model.currentPageNumber)/\(model.totalPages)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 46)
-                .accessibilityLabel("Page progress".tl)
+            // 页码指示可点开跳页对话框（对齐上游 v2.3.0）。
+            Button {
+                pageJumpInput = "\(model.currentPageNumber)"
+                showPageJumpDialog = true
+            } label: {
+                Text(verbatim: "\(model.currentPageNumber)/\(model.totalPages)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.secondary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .frame(minWidth: 46)
+            .accessibilityLabel("Page progress".tl)
 
             if let source = model.source, source.chapterCommentsAvailable,
                model.chapterIds.indices.contains(model.currentEpIndex) {

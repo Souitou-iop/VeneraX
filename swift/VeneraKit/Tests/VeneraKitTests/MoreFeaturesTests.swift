@@ -130,6 +130,44 @@ final class MoreFeaturesTests: XCTestCase {
         XCTAssertFalse(reader.isCurrentPageFavorited())
     }
 
+    /// 跳页输入钳制（对齐上游 v2.3.0 #0bed1f2e：越界值自动纠正而非报错）。
+    @MainActor
+    func testReaderJumpToPageClampsInputToValidRange() async {
+        let comic = Comic(id: "jump-clamp", title: "Jump", cover: "", subtitle: "", sourceKey: "local")
+        let reader = ReaderModel(comic: comic, source: nil, epIndex: 0)
+        reader.pages = (0..<10).map { "\($0).jpg" }
+
+        await reader.jumpToPage(0)
+        XCTAssertEqual(reader.currentIndex, 0)
+        await reader.jumpToPage(999)
+        XCTAssertEqual(reader.currentIndex, 9)
+        await reader.jumpToPage(-5)
+        XCTAssertEqual(reader.currentIndex, 0)
+        await reader.jumpToPage(5)
+        XCTAssertEqual(reader.currentIndex, 4)
+    }
+
+    /// 连续模式显式改索引产生滚动请求目标；消费后置空（对齐 #681334b9 联动语义）。
+    @MainActor
+    func testContinuousSetIndexRequestsPagerScrollToTarget() async {
+        let comic = Comic(id: "jump-cont", title: "Jump Cont", cover: "", subtitle: "", sourceKey: "local")
+        let reader = ReaderModel(comic: comic, source: nil, epIndex: 0)
+        reader.mode = .continuousTopToBottom
+        reader.pages = (0..<6).map { "\($0).jpg" }
+        reader.continuousItems = ReaderModel.continuousItems(for: 0, pageList: reader.pages, chapterTitle: "Ch 1")
+
+        XCTAssertNil(reader.continuousJumpTargetItemID)
+        reader.setIndex(3)
+        XCTAssertEqual(reader.continuousJumpTargetItemID, "0_3_false")
+        XCTAssertEqual(reader.consumeContinuousJumpTargetItemID(), "0_3_false")
+        XCTAssertNil(reader.continuousJumpTargetItemID)
+
+        // 画廊模式不产生滚动请求。
+        reader.mode = .galleryLeftToRight
+        reader.setIndex(2)
+        XCTAssertNil(reader.continuousJumpTargetItemID)
+    }
+
     func testHomeLayoutStore() {
         let defaults = HomeLayoutStore.loadSections()
         XCTAssertEqual(defaults.count, HomeLayoutStore.defaultSections.count)

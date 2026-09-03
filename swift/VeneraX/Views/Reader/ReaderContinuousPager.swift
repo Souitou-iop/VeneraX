@@ -31,6 +31,16 @@ struct ContinuousPager: View {
                     }
                     _ = model.consumeContinuousAnchorToRestoreID()
                 }
+                // 显式跳页（滑杆/跳页对话框）：滚到目标条目并对齐前缘
+                // （对齐上游 v2.3.0：跳转必须精确落在页面上，而非仅改计数器）。
+                .onChange(of: model.continuousJumpTargetItemID) { _, targetID in
+                    guard let targetID else { return }
+                    let anchor: UnitPoint = model.mode == .continuousTopToBottom ? .top : .leading
+                    withTransaction(Transaction()) {
+                        proxy.scrollTo(targetID, anchor: anchor)
+                    }
+                    _ = model.consumeContinuousJumpTargetItemID()
+                }
             }
         }
     }

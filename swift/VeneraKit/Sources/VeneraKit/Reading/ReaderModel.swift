@@ -162,6 +162,9 @@ public final class ReaderModel {
     /// previous chapter is prepended. Stable IDs prevent the viewport from
     /// jumping when the lazy stack grows at its leading edge.
     public private(set) var continuousAnchorToRestoreID: String?
+    /// 显式跳页（滑杆/跳页对话框）请求连续分页器 scrollTo 的目标条目。
+    /// 消费式：分页器执行滚动后立即置空，避免同一目标重复触发。
+    public private(set) var continuousJumpTargetItemID: String?
 
     /// 已加载的图片数据（画廊页码或连续条目 ID → 字节）。
     public var loadedImages: [Int: Data] = [:]
@@ -257,6 +260,7 @@ public final class ReaderModel {
         continuousChapterLoadTasks.removeAll()
         attemptedContinuousChapterIndices.removeAll()
         continuousAnchorToRestoreID = nil
+        continuousJumpTargetItemID = nil
         errorMessage = nil
         isLoadingPages = true
         defer {
@@ -422,6 +426,11 @@ public final class ReaderModel {
         return continuousAnchorToRestoreID
     }
 
+    public func consumeContinuousJumpTargetItemID() -> String? {
+        defer { continuousJumpTargetItemID = nil }
+        return continuousJumpTargetItemID
+    }
+
     /// 切换章节（页码归零；历史记录由调用方在合适时机写入）。
     public func switchChapter(to index: Int) async {
         guard chapterIds.indices.contains(index) || (detailsChapters == nil && index == 0) else { return }
@@ -431,6 +440,7 @@ public final class ReaderModel {
         continuousChapterLoadTasks.removeAll()
         attemptedContinuousChapterIndices.removeAll()
         continuousAnchorToRestoreID = nil
+        continuousJumpTargetItemID = nil
         retryTasks.values.forEach { $0.cancel() }
         retryTasks.removeAll()
         retryTokens.removeAll()
@@ -451,7 +461,24 @@ public final class ReaderModel {
     public func setIndex(_ index: Int) {
         guard pages.indices.contains(index) else { return }
         currentIndex = index
-        trimLoadedImages(around: index)
+        if mode.isContinuous {
+            // 连续模式下显式改索引即跳页请求：分页器监听目标条目并 scrollTo。
+            // 每页 frame 固定为视口尺寸，scrollTo 精确落在页面上（对齐上游
+            // v2.3.0 #681334b9 的语义；Flutter 需 repivot 因其条目高度随图片
+            // 加载漂移，Swift 固定 frame 无此问题）。
+            continuousJumpTargetItemID = "\(currentEpIndex)_\(index)_false"
+        } else {
+            trimLoadedImages(around: index)
+        }
+    }
+
+    /// 跳页对话框入口：钳制到 1...totalPages 后跳转（对齐上游 v2.3.0
+    /// #0bed1f2e 的自动钳制语义），并同步预载与历史。
+    public func jumpToPage(_ pageNumber: Int) async {
+        let index = min(max(pageNumber, 1), max(totalPages, 1)) - 1
+        guard pages.indices.contains(index) else { return }
+        setIndex(index)
+        await afterIndexChange(index)
     }
 
     public func afterIndexChange(_ index: Int) async {
