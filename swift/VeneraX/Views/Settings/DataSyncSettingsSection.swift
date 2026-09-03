@@ -6,6 +6,7 @@ import VeneraKit
 /// _WebdavSetting/_WebdavSyncOptions：数据组 + WebDAV 组）。
 struct DataSyncSettingsSection: View {
     @State private var cacheSize: Int = CacheManager.shared.size
+    @State private var cacheLimitMB: Int = AppData.shared.settings["cacheSize"].intValue ?? 2048
     @State private var showImporter = false
     @State private var showWebdavConfig = false
     @State private var showSyncScanner = false
@@ -18,6 +19,8 @@ struct DataSyncSettingsSection: View {
     @State private var message: String?
     @State private var errorMessage: String?
     @State private var isBusy = false
+    @State private var isClearingCache = false
+    @State private var showClearCacheConfirm = false
     @State private var removeDataSyncObserver: (() -> Void)?
 
     var body: some View {
@@ -32,6 +35,12 @@ struct DataSyncSettingsSection: View {
             }
         }
         .navigationTitle("Data & Sync".tl)
+        .alert("Clear Cache".tl, isPresented: $showClearCacheConfirm) {
+            Button("Clear".tl, role: .destructive) { clearCacheInBackground() }
+            Button("Cancel".tl, role: .cancel) {}
+        } message: {
+            Text("Delete all cached images? Downloaded local comics are not affected.".tl)
+        }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.data],
@@ -106,16 +115,19 @@ struct DataSyncSettingsSection: View {
                 .buttonStyle(.borderless)
             }
             LabeledContent("Cache Size".tl, value: ByteCountFormatter.string(fromByteCount: Int64(cacheSize), countStyle: .file))
-            SettingActionRow(title: "Clear Cache".tl, actionTitle: "Clear".tl) {
-                Task {
-                    CacheManager.shared.clear()
-                    cacheSize = CacheManager.shared.size
-                    message = "Cache cleared".tl
-                }
+            // 确认 + 后台清除（对齐原版 showLoadingDialog 行为）：整目录删除
+            // 可能涉及上万文件，同步执行会卡死主线程。
+            SettingActionRow(
+                title: "Clear Cache".tl,
+                subtitle: isClearingCache ? "Clearing...".tl : nil,
+                actionTitle: "Clear".tl
+            ) {
+                showClearCacheConfirm = true
             }
+            .disabled(isClearingCache)
             SettingActionRow(
                 title: "Cache Limit".tl,
-                subtitle: "\(AppData.shared.settings["cacheSize"].intValue ?? 2048) MB",
+                subtitle: "\(cacheLimitMB) MB",
                 actionTitle: "Set".tl
             ) {
                 promptForCacheLimit()
@@ -227,6 +239,21 @@ struct DataSyncSettingsSection: View {
 
     // MARK: - 动作
 
+    /// 后台清除缓存（对齐原版 loading 对话框语义：清除期间禁止重复触发，
+    /// 完成后刷新统计并提示；上万文件删除不阻塞主线程）。
+    private func clearCacheInBackground() {
+        guard !isClearingCache else { return }
+        isClearingCache = true
+        Task.detached(priority: .userInitiated) {
+            CacheManager.shared.clear()
+            await MainActor.run {
+                isClearingCache = false
+                cacheSize = CacheManager.shared.size
+                message = "Cache cleared".tl
+            }
+        }
+    }
+
     private func promptForCacheLimit() {
         let alert = UIAlertController(
             title: "Set Cache Limit".tl,
@@ -244,6 +271,10 @@ struct DataSyncSettingsSection: View {
                   let value = Int(text), value > 0 else { return }
             AppData.shared.settings["cacheSize"] = .int(value)
             AppData.shared.saveData()
+            cacheLimitMB = value
+            // 立即按新上限淘汰（对齐原版 setLimitSize），而非等下次写入。
+            CacheManager.shared.applyLimit()
+            cacheSize = CacheManager.shared.size
         })
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }

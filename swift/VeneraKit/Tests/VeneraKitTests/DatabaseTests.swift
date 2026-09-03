@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import VeneraKit
 
 final class DatabaseTests: XCTestCase {
@@ -259,6 +260,62 @@ final class DatabaseTests: XCTestCase {
         cache.set("k2", Data(repeating: 8, count: 1024))
         // 上限 0 → 触发清理后应不超过或接近空
         XCTAssertLessThan(cache.size, 2048 * 1024)
+        AppData.shared.settings["cacheSize"] = .int(2048)
+    }
+
+    /// 后台初始扫描：删除无 DB 记录的孤儿文件（对齐原版 _scanDir），
+    /// 账目收敛为「有记录文件的实际字节数」；managed 条目保持可读。
+    func testCacheManagerOrphanCleanupAndAccounting() throws {
+        let cachePath = dataPath + "/cache"
+        // 空目录实例：等它的一次性后台扫描完成，避免与本测试的注入竞争。
+        _ = CacheManager(dataPath: dataPath, cachePath: cachePath)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let managedPayload = Data(repeating: 1, count: 512)
+        let cacheA = CacheManager(dataPath: dataPath, cachePath: cachePath)
+        cacheA.set("managed-key", managedPayload)
+
+        // 孤儿：合法 hash 形状（两段式 hex）但无 DB 记录，mtime 置于过去
+        // （模拟崩溃残留）。Caches 布局外的文件不应被动到。
+        let orphanHash = String(repeating: "ab", count: 32)
+        let orphanDir = cachePath + "/" + String(orphanHash.prefix(2))
+        try FileManager.default.createDirectory(atPath: orphanDir, withIntermediateDirectories: true)
+        let orphanFile = orphanDir + "/" + orphanHash
+        try Data(repeating: 9, count: 256).write(to: URL(fileURLWithPath: orphanFile))
+        let foreignFile = cachePath + "/unrelated.txt"
+        try Data("keep".utf8).write(to: URL(fileURLWithPath: foreignFile))
+        let past = Date().addingTimeInterval(-3600)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: orphanFile)
+        // managed 条目的 mtime 也置于过去：模拟「重启前写入的存量」，
+        // 第二实例的扫描才能把它计入旧文件总量。
+        let managedHash = SHA256.hash(data: Data("managed-key".utf8)).map { String(format: "%02x", $0) }.joined()
+        let managedFile = cachePath + "/" + String(managedHash.prefix(2)) + "/" + managedHash
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: managedFile)
+
+        // 模拟重启：新实例的扫描应删除孤儿并合并账目。
+        let cacheB = CacheManager(dataPath: dataPath, cachePath: cachePath)
+        let deadline = Date().addingTimeInterval(10)
+        while (FileManager.default.fileExists(atPath: orphanFile) ||
+               cacheB.size != managedPayload.count) && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanFile), "orphan must be removed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: foreignFile), "non-cache-layout file must be untouched")
+        XCTAssertEqual(cacheB.size, managedPayload.count, "accounting must converge to managed bytes")
+        XCTAssertEqual(cacheB.getData("managed-key"), managedPayload)
+    }
+
+    /// applyLimit：上限调小后立即淘汰存量超额部分，而非等下一次写入。
+    func testCacheManagerApplyLimitEvictsImmediately() {
+        let cache = CacheManager(dataPath: dataPath, cachePath: dataPath + "/cache")
+        cache.set("big1", Data(repeating: 3, count: 400 * 1024))
+        cache.set("big2", Data(repeating: 4, count: 400 * 1024))
+        XCTAssertGreaterThan(cache.size, 0)
+
+        AppData.shared.settings["cacheSize"] = .int(0)
+        cache.applyLimit()
+        XCTAssertEqual(cache.size, 0, "limit change must evict immediately")
+        XCTAssertNil(cache.getData("big1"))
         AppData.shared.settings["cacheSize"] = .int(2048)
     }
 }

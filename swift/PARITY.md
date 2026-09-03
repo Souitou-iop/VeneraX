@@ -28,101 +28,109 @@
 > **2026-08-29 审计补充**：本轮修复了单图收藏元数据刷新会丢失本地文件、磁盘缓存替换时 `currentSize` 失真、图片收藏页无法批量选择/跨页面刷新/分享远程图等问题。单元测试与模拟器构建通过；这不等于已证明真机长时间零泄漏或零卡顿；本轮继续补齐封面与正文统一复用源级 url/headers/method/data/onResponse 配置、合并同 URL 封面并发请求，并为合集删除增加确认与跨页面变更自动刷新；新增阅读器自动翻页、章节评论独立入口，并在单页画廊模式加入章节末评论页；双页模式和评论页前后章节哨兵仍未完整对齐。阅读器图片解码/增强已移出 SwiftUI body 计算路径，并为页图字节缓存增加邻近窗口 + 约 96 MiB 总预算；双页模式现已加入独立章节末评论页，但评论页前后章节哨兵仍未完整对齐。
 
 ## M1 核心引擎与数据层 ✅
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| SQLite 网关与连接管理（WAL/锁/重入/自愈） | ✅ | DatabaseGateway 单例 + Managed 连接 |
-| 5 个核心库（history/local_favorite/read_later/cookie/local） | ✅ | local.db 已落地 |
-| ComicType int-key 注册表兼容 | ✅ | SourcePlatformResolver |
-| JavaScriptCore 运行时（事件循环/定时器/Promise/微任务） | ✅ | 尖峰 6/6 通过，无需 QuickJS 兜底 |
-| init.js API 面（Network/Convert/Html/Storage/Cookie/UI） | ✅ | JS 源文件直接复用 |
-| Convert（AES 各模式/MD5/SHA/HMAC/RSA/GBK） | ✅ | 字节级验证 |
-| Html DOM（SwiftSoup + 句柄池 RPC） | ✅ | 8 文档 LRU |
-| Cookie 持久化（cookie.db 兼容 + Set-Cookie 解析） | ✅ | WebView 共享与 Cloudflare 解盾打通 |
-| 网络客户端（代理/UA/坏证书/Cookie 注入/CF重试） | ✅ | SNI/DNS 覆盖为已知限制 |
-| CacheManager（LRU 磁盘缓存） | ✅ | |
-| ComicSourceParser（JS class → Swift 回调） | ✅ | 含 isAppVersionAfter 修补 |
-| ComicSourceManager（安装/删除/排序/目录加载） | ✅ | 源库 catalog / 更新检查由 `SourceCatalogManager` 在 M2 提供 |
-| 源设置表单 / 三种登录方式数据面 | ✅ | UI 在 M2 |
-| Komiic 源端到端验收（解析→探索→搜索→详情→章节→票据） | ✅ | mock HTTP 全链路 6 测试 |
+
+| 功能                                                       | 状态 | 备注                                                |
+| -------------------------------------------------------- | -- | ------------------------------------------------- |
+| SQLite 网关与连接管理（WAL/锁/重入/自愈）                              | ✅  | DatabaseGateway 单例 + Managed 连接                   |
+| 5 个核心库（history/local\_favorite/read\_later/cookie/local） | ✅  | local.db 已落地                                      |
+| ComicType int-key 注册表兼容                                  | ✅  | SourcePlatformResolver                            |
+| JavaScriptCore 运行时（事件循环/定时器/Promise/微任务）                 | ✅  | 尖峰 6/6 通过，无需 QuickJS 兜底                           |
+| init.js API 面（Network/Convert/Html/Storage/Cookie/UI）    | ✅  | JS 源文件直接复用                                        |
+| Convert（AES 各模式/MD5/SHA/HMAC/RSA/GBK）                    | ✅  | 字节级验证                                             |
+| Html DOM（SwiftSoup + 句柄池 RPC）                            | ✅  | 8 文档 LRU                                          |
+| Cookie 持久化（cookie.db 兼容 + Set-Cookie 解析）                 | ✅  | WebView 共享与 Cloudflare 解盾打通                       |
+| 网络客户端（代理/UA/坏证书/Cookie 注入/CF重试）                          | ✅  | SNI/DNS 覆盖为已知限制                                   |
+| CacheManager（LRU 磁盘缓存）                                   | ✅  | <br />                                            |
+| ComicSourceParser（JS class → Swift 回调）                   | ✅  | 含 isAppVersionAfter 修补                            |
+| ComicSourceManager（安装/删除/排序/目录加载）                        | ✅  | 源库 catalog / 更新检查由 `SourceCatalogManager` 在 M2 提供 |
+| 源设置表单 / 三种登录方式数据面                                        | ✅  | UI 在 M2                                           |
+| Komiic 源端到端验收（解析→探索→搜索→详情→章节→票据）                         | ✅  | mock HTTP 全链路 6 测试                                |
 
 ## M2 浏览与详情 UI 🚧（核心浏览与首页/源市场路径已落地，仍需端到端覆盖与细节验收）
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| 探索页（multiPage/multiPart，多源切换） | ✅ 按 explore_pages 可见列表过滤排序 | |
-| 漫画列表（分页/游标/无限滚动 + 自适应网格） | ✅ | |
-| 搜索页（历史持久化同库 + 单源结果） | ✅ | |
-| 多源聚合搜索（Aggregated Search） | ✅ | 并发查询/分源横滑呈现 |
-| 跨源换源搜索（Related Sources） | ✅ | 详情页一键同名检索/换源阅读 |
-| 漫画详情页（封面/标签/分组章节/推荐/评论入口/下载弹窗） | ✅ | |
-| 评论页（分页/楼中楼/发送） | ✅ | |
-| 漫画源管理页（URL 安装/删除/设置表单/登录登出） | ✅ 安装自动加入可见页列表 | |
-| Cloudflare 检测 + WKWebView 解盾 | ✅ | 403/503 拦截并自动写回 CookieStore |
-| 首页可编辑区块（kHomeSections 九类） | ✅ | `HomeLayoutStore` + `HomeLayoutEditorSheet` 支持显示/隐藏/排序并持久化；仍需 iPad 端真机验收 |
-| 分类页分类部件 + 排行榜 | ✅ 真实数据（38 分类 + 排行选项） | |
-| 源库 catalog + 更新检查 | ✅ | `SourceCatalogManager` + 市场页支持刷新、版本比较、单源安装与一键更新；网络失败反馈仍可继续细化 |
+
+| 功能                             | 状态                          | 备注                                                                       |
+| ------------------------------ | --------------------------- | ------------------------------------------------------------------------ |
+| 探索页（multiPage/multiPart，多源切换）  | ✅ 按 explore\_pages 可见列表过滤排序 | <br />                                                                   |
+| 漫画列表（分页/游标/无限滚动 + 自适应网格）       | ✅                           | <br />                                                                   |
+| 搜索页（历史持久化同库 + 单源结果）            | ✅                           | <br />                                                                   |
+| 多源聚合搜索（Aggregated Search）      | ✅                           | 并发查询/分源横滑呈现                                                              |
+| 跨源换源搜索（Related Sources）        | ✅                           | 详情页一键同名检索/换源阅读                                                           |
+| 漫画详情页（封面/标签/分组章节/推荐/评论入口/下载弹窗） | ✅                           | <br />                                                                   |
+| 评论页（分页/楼中楼/发送）                 | ✅                           | <br />                                                                   |
+| 漫画源管理页（URL 安装/删除/设置表单/登录登出）    | ✅ 安装自动加入可见页列表               | <br />                                                                   |
+| Cloudflare 检测 + WKWebView 解盾   | ✅                           | 403/503 拦截并自动写回 CookieStore                                              |
+| 首页可编辑区块（kHomeSections 九类）      | ✅                           | `HomeLayoutStore` + `HomeLayoutEditorSheet` 支持显示/隐藏/排序并持久化；仍需 iPad 端真机验收 |
+| 分类页分类部件 + 排行榜                  | ✅ 真实数据（38 分类 + 排行选项）        | <br />                                                                   |
+| 源库 catalog + 更新检查              | ✅                           | `SourceCatalogManager` + 市场页支持刷新、版本比较、单源安装与一键更新；网络失败反馈仍可继续细化             |
 
 ## M3 阅读器 🚧（基础阅读闭环已完成，若干原版能力仍缺）
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| 6 种翻页模式（画廊 3 + 连续 3，运行时切换） | ✅ | |
-| 跨章节平滑连读（Continuous Seamless Append） | ✅ | 连续模式自动追加下一话 |
-| 双击缩放/捏合缩放（UIScrollView 内核，2x-10x） | ✅ | |
-| 单击呼出工具栏 | ✅ | |
-| ±N 双向预载（preloadImageCount） | ✅ | |
-| 夜间模式（暖色/黑/红遮罩 + 强度） | ✅ | |
-| 页码浮层 + 滑动条 + 模式菜单 + 重载 | ✅ | |
-| 章节抽屉 + 已读标记 | ✅ | |
-| 历史记录写入（ep/page/readEpisode） | ✅ | |
-| 阅读时长统计（30s 结算 reading_statistics） | ✅ | |
-| ImageDownloader（headers/onResponse/modifyImage） | ✅ headers+onResponse | |
-| 本地离线直读（本地漫画/已下载章节优先读磁盘） | ✅ | |
-| 阅读器当前页单图收藏（本地保存/收藏页/多选管理） | ✅ | 阅读器工具栏可切换当前页收藏并保存图片数据；连续模式与画廊模式共用状态 |
-| 阅读器页加载任务生命周期 | ✅ | `ReaderPageView.Coordinator` 取消重复/过期任务，避免快速翻页时重复请求和旧图回写 |
-| 阅读器加载竞态（重试/切章） | ✅ | `ReaderModel` 使用加载代次校验并清理旧预载，避免旧请求覆盖新章节状态 |
-| 双页阅读与跨页切分 | 🚧 | 已实现封面单页、双页分组、RTL 顺序、前后章节哨兵和章节评论独立页；真实跨页切分、iPad/横屏和真机边界仍需验收 |
-| 长按缩放/音量键（iOS 不适用）/自动翻页 | 🚧 | 已加入阅读器自动翻页按钮与 `autoPageTurningInterval`；长按/音量键不适用，仍需真机验证章节边界与后台取消 |
-| 增强滤镜（Metal 移植 GLSL） | 🚧 | 已从 SwiftUI body 计算路径移出 UIImage 解码/增强，使用不可变参数快照 + detached Core Image；当前仍是 CoreImage 近似实现，不是原 Flutter GLSL 的像素级移植，需真机画质与性能对比 |
-| 阅读器内章节评论 | 🚧 | 已加入 API、分页/回复/发送、单页和双页章节末评论页及哨兵；双页/前后章节边界仍需真机验收 |
+
+| 功能                                              | 状态                   | 备注                                                                                                                          |
+| ----------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 6 种翻页模式（画廊 3 + 连续 3，运行时切换）                      | ✅                    | <br />                                                                                                                      |
+| 跨章节平滑连读（Continuous Seamless Append）             | ✅                    | 连续模式自动追加下一话                                                                                                                 |
+| 双击缩放/捏合缩放（UIScrollView 内核，2x-10x）               | ✅                    | <br />                                                                                                                      |
+| 单击呼出工具栏                                         | ✅                    | <br />                                                                                                                      |
+| ±N 双向预载（preloadImageCount）                      | ✅                    | <br />                                                                                                                      |
+| 夜间模式（暖色/黑/红遮罩 + 强度）                             | ✅                    | <br />                                                                                                                      |
+| 页码浮层 + 滑动条 + 模式菜单 + 重载                          | ✅                    | <br />                                                                                                                      |
+| 章节抽屉 + 已读标记                                     | ✅                    | <br />                                                                                                                      |
+| 历史记录写入（ep/page/readEpisode）                     | ✅                    | <br />                                                                                                                      |
+| 阅读时长统计（30s 结算 reading\_statistics）              | ✅                    | <br />                                                                                                                      |
+| ImageDownloader（headers/onResponse/modifyImage） | ✅ headers+onResponse | <br />                                                                                                                      |
+| 本地离线直读（本地漫画/已下载章节优先读磁盘）                         | ✅                    | <br />                                                                                                                      |
+| 阅读器当前页单图收藏（本地保存/收藏页/多选管理）                       | ✅                    | 阅读器工具栏可切换当前页收藏并保存图片数据；连续模式与画廊模式共用状态                                                                                         |
+| 阅读器页加载任务生命周期                                    | ✅                    | `ReaderPageView.Coordinator` 取消重复/过期任务，避免快速翻页时重复请求和旧图回写                                                                     |
+| 阅读器加载竞态（重试/切章）                                  | ✅                    | `ReaderModel` 使用加载代次校验并清理旧预载，避免旧请求覆盖新章节状态                                                                                   |
+| 双页阅读与跨页切分                                       | 🚧                   | 已实现封面单页、双页分组、RTL 顺序、前后章节哨兵和章节评论独立页；真实跨页切分、iPad/横屏和真机边界仍需验收                                                                  |
+| 长按缩放/音量键（iOS 不适用）/自动翻页                          | 🚧                   | 已加入阅读器自动翻页按钮与 `autoPageTurningInterval`；长按/音量键不适用，仍需真机验证章节边界与后台取消                                                           |
+| 增强滤镜（Metal 移植 GLSL）                             | 🚧                   | 已从 SwiftUI body 计算路径移出 UIImage 解码/增强，使用不可变参数快照 + detached Core Image；当前仍是 CoreImage 近似实现，不是原 Flutter GLSL 的像素级移植，需真机画质与性能对比 |
+| 阅读器内章节评论                                        | 🚧                   | 已加入 API、分页/回复/发送、单页和双页章节末评论页及哨兵；双页/前后章节边界仍需真机验收                                                                             |
 
 ## M4 收藏·历史·本地库 🚧（下载/本地库与图片收藏/合集基础闭环已落地，任务类型汇总仍缺）
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| 收藏操作面板（本地文件夹/新建/网络收藏夹） | ✅ | |
-| 收藏页（本地多文件夹 + 网络收藏 + 滑动删除） | ✅ | |
-| 追更监控（Follow Updates / 徽标 / 追更列表） | ✅ | |
-| 稍后读页 + 详情页加入 | ✅ | |
-| 历史页（进度显示/隐藏/清空） | ✅ | |
-| 本地漫画存储（local.db / LocalManager / LocalComic） | ✅ | |
-| 下载管理器（DownloadManager + Images/Archive 任务） | ✅ | |
-| 本地漫画页（LocalComicsView，4 状态分栏/搜索/排序） | ✅ | |
-| 下载管理页（DownloadingView，实时网速/队列控制） | ✅ | |
-| 本地漫画导入导出（CBZ/ZIP/文件夹/ComicInfo.xml） | 🚧 | 已支持 CBZ/ZIP/文件夹、`.venera_comics`、PDF/EPUB 与多选导出任务；批量 `.venera_comics` 仍为多个文件，不是 Flutter 的合并单文件模式 |
-| 图片收藏 / 合集 / 任务中心 | 🚧 | 图片收藏、合集和任务中心基础闭环已具备；任务中心现展示下载、迁移、追更、源更新、WebDAV 同步、WebDAV 漫画库迁移和本地批量导出；翻译任务、后台恢复和合并 `.venera_comics` 仍有缺口 |
+
+| 功能                                           | 状态 | 备注                                                                                                       |
+| -------------------------------------------- | -- | -------------------------------------------------------------------------------------------------------- |
+| 收藏操作面板（本地文件夹/新建/网络收藏夹）                       | ✅  | <br />                                                                                                   |
+| 收藏页（本地多文件夹 + 网络收藏 + 滑动删除）                    | ✅  | <br />                                                                                                   |
+| 追更监控（Follow Updates / 徽标 / 追更列表）             | ✅  | <br />                                                                                                   |
+| 稍后读页 + 详情页加入                                 | ✅  | <br />                                                                                                   |
+| 历史页（进度显示/隐藏/清空）                              | ✅  | <br />                                                                                                   |
+| 本地漫画存储（local.db / LocalManager / LocalComic） | ✅  | <br />                                                                                                   |
+| 下载管理器（DownloadManager + Images/Archive 任务）   | ✅  | <br />                                                                                                   |
+| 本地漫画页（LocalComicsView，4 状态分栏/搜索/排序）          | ✅  | <br />                                                                                                   |
+| 下载管理页（DownloadingView，实时网速/队列控制）             | ✅  | <br />                                                                                                   |
+| 本地漫画导入导出（CBZ/ZIP/文件夹/ComicInfo.xml）          | 🚧 | 已支持 CBZ/ZIP/文件夹、`.venera_comics`、PDF/EPUB 与多选导出任务；批量 `.venera_comics` 仍为多个文件，不是 Flutter 的合并单文件模式         |
+| 图片收藏 / 合集 / 任务中心                             | 🚧 | 图片收藏、合集和任务中心基础闭环已具备；任务中心现展示下载、迁移、追更、源更新、WebDAV 同步、WebDAV 漫画库迁移和本地批量导出；翻译任务、后台恢复和合并 `.venera_comics` 仍有缺口 |
 
 ## M5 同步与系统集成 🚧（同步主链路与深链代码已落地，端到端/指南/iPad 专项仍缺）
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| WebDAV 客户端（PROPFIND/GET/PUT/MKCOL/Basic Auth） | ✅ | 含路径编码和基础 URL 保留 |
-| 同步引擎（.venera 打包/版本判定/上传下载/保留清理/local.db 同步） | ✅ | |
-| 导出→导入往返对拍（逐库逐键） | ✅ | |
-| 首启迁移向导（WebDAV 导入） | ✅ | |
-| 应用锁（生物识别 + PIN） | ✅ 含设置录入表单 | |
-| 同步设置页（配置/手动上传下载） | ✅ 并入数据与同步分区 | |
-| 三档自动同步（realtime/dataSaver/manual） | ✅ realtime 防抖上传 + dataSaver 场景结算 | |
-| 本地 .venera 文件导入（文件选择器） | ✅ 数据与同步分区 | |
-| 远程备份列表 + 指定备份下载 + 同步日志 | ✅ | |
-| WebDAV 漫画库迁移 | 🚧 | 已接入本地已下载漫画→远端目录/章节/图片的可取消任务；跳过已存在目录，真实服务器验证和断点续传仍缺 |
-| 跳过同步分类（disableSyncFields） | ✅ | |
-| 15 个设置分区全量 + 设置搜索 | ✅ 8 分区（iOS 端原版即 8 分区）+ 搜索 | |
-| 阅读统计页（Swift Charts 图表） | ✅ | |
-| venera:// 深链 | ✅ | 已接入启动后延迟路由；漫画链接加载详情后打开阅读器 |
-| 免责声明 | ✅ 关于分区可重看（首启同意在向导） | |
-| 指南 / iPad 专项 | 🚧 | 已加入离线 Guide 页面并直接复用 `doc/guide.zh.md` / `doc/guide.en.md`；iPad 专项仍需真机验收 |
+
+| 功能                                            | 状态                               | 备注                                                                      |
+| --------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
+| WebDAV 客户端（PROPFIND/GET/PUT/MKCOL/Basic Auth） | ✅                                | 含路径编码和基础 URL 保留                                                         |
+| 同步引擎（.venera 打包/版本判定/上传下载/保留清理/local.db 同步）   | ✅                                | <br />                                                                  |
+| 导出→导入往返对拍（逐库逐键）                               | ✅                                | <br />                                                                  |
+| 首启迁移向导（WebDAV 导入）                             | ✅                                | <br />                                                                  |
+| 应用锁（生物识别 + PIN）                               | ✅ 含设置录入表单                        | <br />                                                                  |
+| 同步设置页（配置/手动上传下载）                              | ✅ 并入数据与同步分区                      | <br />                                                                  |
+| 三档自动同步（realtime/dataSaver/manual）             | ✅ realtime 防抖上传 + dataSaver 场景结算 | <br />                                                                  |
+| 本地 .venera 文件导入（文件选择器）                        | ✅ 数据与同步分区                        | <br />                                                                  |
+| 远程备份列表 + 指定备份下载 + 同步日志                        | ✅                                | <br />                                                                  |
+| WebDAV 漫画库迁移                                  | 🚧                               | 已接入本地已下载漫画→远端目录/章节/图片的可取消任务；跳过已存在目录，真实服务器验证和断点续传仍缺                      |
+| 跳过同步分类（disableSyncFields）                     | ✅                                | <br />                                                                  |
+| 15 个设置分区全量 + 设置搜索                             | ✅ 8 分区（iOS 端原版即 8 分区）+ 搜索        | <br />                                                                  |
+| 阅读统计页（Swift Charts 图表）                        | ✅                                | <br />                                                                  |
+| venera:// 深链                                  | ✅                                | 已接入启动后延迟路由；漫画链接加载详情后打开阅读器                                               |
+| 免责声明                                          | ✅ 关于分区可重看（首启同意在向导）               | <br />                                                                  |
+| 指南 / iPad 专项                                  | 🚧                               | 已加入离线 Guide 页面并直接复用 `doc/guide.zh.md` / `doc/guide.en.md`；iPad 专项仍需真机验收 |
 
 ## M6 打磨与发布
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| 随机抽漫画 | ✅ | 收藏候选池内本轮不重复，候选耗尽后自动开启新轮次 |
-| 扫码导入同步配置 | 🚧 | 已接入原生 AVFoundation QR 扫描、PIN、Flutter 兼容 AES-GCM/PBKDF2 解码和 WebDAV 表单回填；模拟器无真实摄像头，需实体机验收 |
-| 缓存管理 / 性能画像 / 无障碍 | ⬜ | 尚未完成系统化功能与 Instruments/Accessibility 审计 |
-| AltStore 发布管线 + 图标 | ⬜ | |
+
+| 功能                 | 状态 | 备注                                                                                      |
+| ------------------ | -- | --------------------------------------------------------------------------------------- |
+| 随机抽漫画              | ✅  | 收藏候选池内本轮不重复，候选耗尽后自动开启新轮次                                                                |
+| 扫码导入同步配置           | 🚧 | 已接入原生 AVFoundation QR 扫描、PIN、Flutter 兼容 AES-GCM/PBKDF2 解码和 WebDAV 表单回填；模拟器无真实摄像头，需实体机验收 |
+| 缓存管理               | ✅  | 设置页缓存大小/清除（确认+后台+进度态）/上限（保存即淘汰 applyLimit）；CacheManager 命中 touch LRU、过期优先淘汰、DB size 列账目（锁外原子写不串行化）、后台启动扫描+孤儿清理（mtime 防误删，非 hash 布局文件不动） |
+| 性能画像 / 无障碍        | ⬜  | Instruments 量化审计与 Accessibility 检查仍未做                                                             |
+| AltStore 发布管线 + 图标 | ⬜  | <br />                                                                                  |
+
