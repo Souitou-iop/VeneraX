@@ -221,6 +221,13 @@ public final class ReaderModel {
 
     public func setChapters(_ chapters: ComicChapters?) {
         detailsChapters = chapters
+        // 开关在详情页，阅读器打开期间不会变化——与原版一致只解析一次。
+        if let chapters, !chapters.isEmpty,
+           ChapterDuplicatePrefs.isHidden(comicId: comic.id, sourceKey: comic.sourceKey) {
+            hiddenChapterIndices = chapters.duplicateTitleIndices()
+        } else {
+            hiddenChapterIndices = []
+        }
     }
 
     public var chapterIds: [String] {
@@ -229,6 +236,30 @@ public final class ReaderModel {
 
     public var chapterTitles: [String] {
         detailsChapters?.titles ?? []
+    }
+
+    /// 被本漫画「隐藏重复章节」开关折叠的章节（平铺 0 基索引）。
+    public private(set) var hiddenChapterIndices: Set<Int> = []
+
+    public func isChapterHidden(_ ep: Int) -> Bool {
+        hiddenChapterIndices.contains(ep)
+    }
+
+    /// 从 from 按步长 step 步进的第一个未隐藏章节；不可达返回 nil。
+    /// 阅读器翻章、抽屉跳转与连续模式预取都经由此入口，
+    /// 保证隐藏章节不会再被步进/列表/预取走回去（对齐原版 #bb27c447）。
+    public func nextVisibleChapter(from: Int, step: Int) -> Int? {
+        guard let detailsChapters else {
+            let target = from + step
+            return chapterIds.indices.contains(target) ? target : nil
+        }
+        return VeneraKit.nextVisibleChapter(
+            from: from,
+            step: step,
+            chapterCount: chapterIds.count,
+            isHidden: { self.isChapterHidden($0) },
+            groupOf: { detailsChapters.groupOfChapter($0) }
+        )
     }
 
     public func chapterTitle(at index: Int) -> String? {
@@ -411,14 +442,15 @@ public final class ReaderModel {
     /// 保留旧调用点语义：显式请求下一章时仍然可以直接调用。
     public func loadNextChapterInContinuousMode() async {
         let lastLoaded = loadedChapterIndices.max() ?? currentEpIndex
-        guard chapterIds.indices.contains(lastLoaded + 1) else { return }
-        await loadContinuousChapter(lastLoaded + 1, prepend: false)
+        // 跳过被隐藏的重复章节，而不是把列表重新走回去（对齐 #bb27c447）。
+        guard let target = nextVisibleChapter(from: lastLoaded, step: 1) else { return }
+        await loadContinuousChapter(target, prepend: false)
     }
 
     public func loadPreviousChapterInContinuousMode() async {
         let firstLoaded = loadedChapterIndices.min() ?? currentEpIndex
-        guard chapterIds.indices.contains(firstLoaded - 1) else { return }
-        await loadContinuousChapter(firstLoaded - 1, prepend: true)
+        guard let target = nextVisibleChapter(from: firstLoaded, step: -1) else { return }
+        await loadContinuousChapter(target, prepend: true)
     }
 
     public func consumeContinuousAnchorToRestoreID() -> String? {
@@ -501,14 +533,14 @@ public final class ReaderModel {
 
         let count = continuousItems.count
         if Self.shouldPrefetchPreviousContinuousChapter(itemOffset: offset, itemCount: count) {
-            let previous = (loadedChapterIndices.min() ?? currentEpIndex) - 1
-            if chapterIds.indices.contains(previous) {
+            let loaded = loadedChapterIndices.min() ?? currentEpIndex
+            if let previous = nextVisibleChapter(from: loaded, step: -1) {
                 Task { [weak self] in await self?.loadContinuousChapter(previous, prepend: true) }
             }
         }
         if Self.shouldPrefetchNextContinuousChapter(itemOffset: offset, itemCount: count) {
-            let next = (loadedChapterIndices.max() ?? currentEpIndex) + 1
-            if chapterIds.indices.contains(next) {
+            let loaded = loadedChapterIndices.max() ?? currentEpIndex
+            if let next = nextVisibleChapter(from: loaded, step: 1) {
                 Task { [weak self] in await self?.loadContinuousChapter(next, prepend: false) }
             }
         }
@@ -517,10 +549,6 @@ public final class ReaderModel {
     private func getChapterPages(for ep: Int) -> [String]? {
         let matching = continuousItems.filter { $0.epIndex == ep && !$0.isChapterHeader }
         return matching.isEmpty ? nil : matching.map(\.imageKey)
-    }
-
-    public func hasChapter(offset: Int) -> Bool {
-        chapterIds.indices.contains(currentEpIndex + offset)
     }
 
     public func isChapterReadMark(_ index: Int) -> Bool {

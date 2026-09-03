@@ -355,18 +355,22 @@ struct ReaderView: View {
         NavigationStack {
             List {
                 ForEach(Array(model.chapterIds.enumerated()), id: \.offset) { index, _ in
-                    Button {
-                        showChapters = false
-                        Task { await model.switchChapter(to: index) }
-                    } label: {
-                        HStack {
-                            Text(verbatim: model.chapterTitle(at: index) ?? "\(index + 1)")
-                                .foregroundStyle(index == model.currentEpIndex ? Color.accentColor : .primary)
-                            Spacer()
-                            if model.isChapterReadMark(index) {
-                                Image(systemName: "checkmark")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                    // 抽屉列表跳过被隐藏的重复章节（对齐原版 #bb27c447：
+                    // 步进、列表和预取都不能把隐藏条目走回去）。
+                    if !model.isChapterHidden(index) {
+                        Button {
+                            showChapters = false
+                            Task { await model.switchChapter(to: index) }
+                        } label: {
+                            HStack {
+                                Text(verbatim: model.chapterTitle(at: index) ?? "\(index + 1)")
+                                    .foregroundStyle(index == model.currentEpIndex ? Color.accentColor : .primary)
+                                Spacer()
+                                if model.isChapterReadMark(index) {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
                         }
                     }

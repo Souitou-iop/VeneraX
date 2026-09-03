@@ -168,6 +168,129 @@ final class MoreFeaturesTests: XCTestCase {
         XCTAssertNil(reader.continuousJumpTargetItemID)
     }
 
+    /// 重复标题检测：scope 内去重、跨 scope 独立、空白标题跳过、trim 后比较。
+    func testFindDuplicateTitleIndicesScopesAndTrim() {
+        // 平铺：0/1 同名 → 1 为重复；3 标题仅空白差异（trim 后同名）→ 重复。
+        let flat = findDuplicateTitleIndices(
+            count: 5,
+            titleOf: { ["第1话", "第1话", "第2话", "  第2话  ", "" ][$0] }
+        )
+        XCTAssertEqual(flat, [1, 3])
+
+        // 分 scope：两组各自的「第一话」互不干扰，只有组内第二次出现才上报。
+        let grouped = findDuplicateTitleIndices(
+            count: 5,
+            titleOf: { ["第一话", "第二话", "第一话", "第一话", "第二话"][$0] },
+            scopes: [[0, 1], [2, 3, 4]]
+        )
+        XCTAssertEqual(grouped, [3])
+    }
+
+    /// 步进跳过隐藏章节：组内跳过、组边界止步、第一步允许跨组。
+    func testNextVisibleChapterSkipSearchStaysInGroup() {
+        // 平铺无分组：0→1 隐藏→2。
+        let flat = VeneraKit.nextVisibleChapter(
+            from: 0, step: 1, chapterCount: 3,
+            isHidden: { $0 == 1 }, groupOf: { _ in 0 }
+        )
+        XCTAssertEqual(flat, 2)
+
+        // 分组 [0,1] | [2,3]：from=0 向后跳过 1 时不得越过组边界进入组 2。
+        let bounded = VeneraKit.nextVisibleChapter(
+            from: 0, step: 1, chapterCount: 4,
+            isHidden: { $0 == 1 }, groupOf: { $0 < 2 ? 0 : 1 }
+        )
+        XCTAssertNil(bounded)
+
+        // 第一步本身就是普通 ±1：允许跨组（1→2），只有落点隐藏才受限搜索。
+        let crossGroupFirstStep = VeneraKit.nextVisibleChapter(
+            from: 1, step: 1, chapterCount: 4,
+            isHidden: { _ in false }, groupOf: { $0 < 2 ? 0 : 1 }
+        )
+        XCTAssertEqual(crossGroupFirstStep, 2)
+
+        // 越界与 step=0。
+        XCTAssertNil(VeneraKit.nextVisibleChapter(
+            from: 3, step: 1, chapterCount: 4, isHidden: { _ in false }, groupOf: { _ in 0 }
+        ))
+        XCTAssertNil(VeneraKit.nextVisibleChapter(
+            from: 1, step: 0, chapterCount: 4, isHidden: { _ in false }, groupOf: { _ in 0 }
+        ))
+    }
+
+    /// 每部漫画隐藏开关往返（设备本地 implicitData）。
+    func testChapterDuplicatePrefsRoundTrip() {
+        let key = "hideDuplicateChapters"
+        defer { AppData.shared.setImplicitValue(key, .object([:])) }
+
+        XCTAssertFalse(ChapterDuplicatePrefs.isHidden(comicId: "dup-a", sourceKey: "komiic"))
+        ChapterDuplicatePrefs.setHidden(true, comicId: "dup-a", sourceKey: "komiic")
+        XCTAssertTrue(ChapterDuplicatePrefs.isHidden(comicId: "dup-a", sourceKey: "komiic"))
+        XCTAssertFalse(ChapterDuplicatePrefs.isHidden(comicId: "dup-b", sourceKey: "komiic"))
+        ChapterDuplicatePrefs.setHidden(false, comicId: "dup-a", sourceKey: "komiic")
+        XCTAssertFalse(ChapterDuplicatePrefs.isHidden(comicId: "dup-a", sourceKey: "komiic"))
+    }
+
+    /// 阅读器解析隐藏集合并在步进/抽屉判定中跳过（对齐 #bb27c447）。
+    @MainActor
+    func testReaderResolvesHiddenChaptersAndSkipsInStepping() {
+        let chapters = ComicChapters(groupEntries: [
+            .init(name: "正文", chapters: [
+                .init(id: "e1", title: "第1话"),
+                .init(id: "e2", title: "第2话"),
+                .init(id: "e3", title: "第2话"),
+                .init(id: "e4", title: "第3话"),
+            ])
+        ])
+        let comic = Comic(id: "hide-dup", title: "Hide Dup", cover: "", subtitle: "", sourceKey: "komiic")
+        ChapterDuplicatePrefs.setHidden(true, comicId: comic.id, sourceKey: comic.sourceKey)
+        defer { ChapterDuplicatePrefs.setHidden(false, comicId: comic.id, sourceKey: comic.sourceKey) }
+
+        let reader = ReaderModel(comic: comic, source: nil, epIndex: 0)
+        reader.setChapters(chapters)
+
+        // e3 标题与 e2 重复 → 平铺索引 2 被折叠。
+        XCTAssertEqual(reader.hiddenChapterIndices, [2])
+        XCTAssertTrue(reader.isChapterHidden(2))
+        XCTAssertFalse(reader.isChapterHidden(1))
+
+        // 翻章步进跳过隐藏章节。
+        XCTAssertEqual(reader.nextVisibleChapter(from: 1, step: 1), 3)
+        XCTAssertEqual(reader.nextVisibleChapter(from: 3, step: -1), 1)
+        XCTAssertNil(reader.nextVisibleChapter(from: 3, step: 1))
+
+        // 开关关闭时不折叠。
+        ChapterDuplicatePrefs.setHidden(false, comicId: comic.id, sourceKey: comic.sourceKey)
+        reader.setChapters(chapters)
+        XCTAssertTrue(reader.hiddenChapterIndices.isEmpty)
+        XCTAssertEqual(reader.nextVisibleChapter(from: 1, step: 1), 2)
+    }
+
+    /// 分组章节的组边界：隐藏组尾后向后搜索不得跨入下一组。
+    @MainActor
+    func testReaderNextVisibleStopsAtGroupBoundary() {
+        let chapters = ComicChapters(groupEntries: [
+            .init(name: "正文", chapters: [
+                .init(id: "a1", title: "第1话"),
+                .init(id: "a2", title: "第1话"),
+            ]),
+            .init(name: "番外", chapters: [
+                .init(id: "b1", title: "特别篇"),
+            ])
+        ])
+        let comic = Comic(id: "hide-dup-g", title: "Groups", cover: "", subtitle: "", sourceKey: "komiic")
+        ChapterDuplicatePrefs.setHidden(true, comicId: comic.id, sourceKey: comic.sourceKey)
+        defer { ChapterDuplicatePrefs.setHidden(false, comicId: comic.id, sourceKey: comic.sourceKey) }
+
+        let reader = ReaderModel(comic: comic, source: nil, epIndex: 0)
+        reader.setChapters(chapters)
+
+        // 平铺索引 1（组 0 的重复项）被折叠；从 0 向后受限搜索止于组边界，
+        // 不得把读者直接丢到组 1 的「特别篇」。
+        XCTAssertEqual(reader.hiddenChapterIndices, [1])
+        XCTAssertNil(reader.nextVisibleChapter(from: 0, step: 1))
+    }
+
     func testHomeLayoutStore() {
         let defaults = HomeLayoutStore.loadSections()
         XCTAssertEqual(defaults.count, HomeLayoutStore.defaultSections.count)

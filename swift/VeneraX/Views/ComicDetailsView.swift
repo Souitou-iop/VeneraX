@@ -16,6 +16,14 @@ struct ComicDetailsView: View {
     @State private var showRelatedSourcesSheet = false
     @State private var isChapterReversed: Bool = AppData.shared.settings["reverseChapterOrder"].boolValue ?? false
     @State private var readerTarget: ReaderTarget?
+    /// 「隐藏重复章节」开关（每部漫画、设备本地，对齐原版 ChapterDuplicatePrefs）。
+    @State private var hideDuplicateChapters = false
+    @State private var duplicateChapterIndices: Set<Int> = []
+
+    private func refreshDuplicateChapterState() {
+        hideDuplicateChapters = ChapterDuplicatePrefs.isHidden(comicId: comic.id, sourceKey: comic.sourceKey)
+        duplicateChapterIndices = details?.chapters?.duplicateTitleIndices() ?? []
+    }
 
     private func addToReadLater() {
         ReadLaterManager.shared.add(
@@ -135,6 +143,7 @@ struct ComicDetailsView: View {
             if details == nil {
                 await load()
             }
+            refreshDuplicateChapterState()
         }
     }
 
@@ -164,6 +173,28 @@ struct ComicDetailsView: View {
                             .padding(.vertical, 2)
                             .background(.quaternary, in: Capsule())
                         Spacer()
+                        if !duplicateChapterIndices.isEmpty {
+                            // 仅在本作确实存在重复时提供开关（对齐原版：
+                            // 无重复的列表给出一个可见无效的开关没有意义）。
+                            Button {
+                                let next = !hideDuplicateChapters
+                                ChapterDuplicatePrefs.setHidden(next, comicId: comic.id, sourceKey: comic.sourceKey)
+                                hideDuplicateChapters = next
+                                AppServices.shared.showMessage(
+                                    next
+                                        ? "Hid @count duplicate chapters".tl.replacingOccurrences(of: "@count", with: "\(duplicateChapterIndices.count)")
+                                        : "Showing all chapters".tl
+                                )
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: hideDuplicateChapters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                                    Text(hideDuplicateChapters ? "Show duplicate chapters".tl : "Hide duplicate chapters".tl)
+                                }
+                                .font(.caption)
+                                .foregroundStyle(hideDuplicateChapters ? Color.accentColor : Color.secondary)
+                            }
+                            .accessibilityLabel(hideDuplicateChapters ? "Show duplicate chapters".tl : "Hide duplicate chapters".tl)
+                        }
                         Button {
                             isChapterReversed.toggle()
                         } label: {
@@ -264,7 +295,15 @@ struct ComicDetailsView: View {
             .pickerStyle(.menu)
         }
         let entriesInGroup = currentChapters(chapters)
-        let displayOrder = isChapterReversed ? Array(entriesInGroup.reversed()) : entriesInGroup
+        // 隐藏开关只移除条目本身——平铺索引保持原值，跳转/下载/历史
+        // 仍以平铺索引寻址（对齐原版 _computeVisible 语义）。
+        let hidden = hideDuplicateChapters ? duplicateChapterIndices : Set<Int>()
+        let idToIndex = flatIndexMap(of: chapters)
+        let visibleEntries = entriesInGroup.filter { entry in
+            guard let idx = idToIndex[entry.id] else { return true }
+            return !hidden.contains(idx)
+        }
+        let displayOrder = isChapterReversed ? Array(visibleEntries.reversed()) : visibleEntries
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 98, maximum: 140), spacing: 6, alignment: .top)],
             alignment: .leading,
@@ -325,6 +364,15 @@ struct ComicDetailsView: View {
 
     private func currentChapters(_ chapters: ComicChapters) -> [ComicChapters.Entry] {
         chapters.entries(inGroup: selectedGroup)
+    }
+
+    /// id → 平铺索引（firstIndex 语义：重复 id 取首次出现）。
+    private func flatIndexMap(of chapters: ComicChapters) -> [String: Int] {
+        var map: [String: Int] = [:]
+        for (i, id) in chapters.ids.enumerated() where map[id] == nil {
+            map[id] = i
+        }
+        return map
     }
 
     private func absoluteChapterIndex(_ chapters: ComicChapters, entryID: String) -> Int {

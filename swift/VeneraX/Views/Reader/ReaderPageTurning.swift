@@ -57,6 +57,7 @@ enum ReaderPageTurning {
     }
 
     /// 相对切换章节：展示章节过渡屏（Mihon chapter transition 模式）。
+    /// 步进跳过被「隐藏重复章节」折叠的条目（对齐原版 #bb27c447）。
     @MainActor
     private static func switchChapter(
         _ model: ReaderModel,
@@ -64,7 +65,7 @@ enum ReaderPageTurning {
         toEnd: Bool,
         chapterTransition: Binding<String?>
     ) async -> Bool {
-        guard model.hasChapter(offset: delta) else {
+        guard let target = model.nextVisibleChapter(from: model.currentEpIndex, step: delta) else {
             chapterTransition.wrappedValue = delta > 0 ? "已是最后一话".tl : "已是第一话".tl
             haptic(.warning)
             Task { @MainActor in
@@ -73,7 +74,6 @@ enum ReaderPageTurning {
             }
             return false
         }
-        let target = model.currentEpIndex + delta
         let title = model.chapterTitle(at: target) ?? String(target + 1)
         let label = (delta > 0 ? "下一话".tl : "上一话".tl) + " · " + title
         chapterTransition.wrappedValue = label
