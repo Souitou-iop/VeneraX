@@ -189,6 +189,8 @@ struct SettingToggleRow: View {
 }
 
 /// 滑杆行（对齐 _SliderSetting；显示格式化当前值）。
+/// 与开关行同理：内部 @State 驱动视觉，写入经 onChange 落盘，保证
+/// 辅助功能/自动化路径下滑杆位置与数值文本即时同步。
 struct SettingSliderRow: View {
     let title: String
     let key: String
@@ -196,6 +198,9 @@ struct SettingSliderRow: View {
     let step: Double
     var defaultValue: Double
     var format: (Double) -> String = { String(format: "%.0f", $0) }
+    var scope: ReaderSettingScope?
+
+    @State private var value: Double
 
     init(
         title: String, key: String,
@@ -211,28 +216,45 @@ struct SettingSliderRow: View {
         self.defaultValue = defaultValue
         self.format = format
         self.scope = scope
+        let current = (scope?.effective(key) ?? AppData.shared.settings[key]).doubleValue ?? defaultValue
+        _value = State(initialValue: current)
     }
 
-    var scope: ReaderSettingScope?
+    private var currentValue: Double {
+        (scope?.effective(key) ?? AppData.shared.settings[key]).doubleValue ?? defaultValue
+    }
 
     var body: some View {
-        let binding = SettingsBinding.double(key, default: defaultValue, scope: scope)
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
                 Spacer()
-                Text(verbatim: format(binding.wrappedValue))
+                Text(verbatim: format(value))
                     .foregroundStyle(.secondary)
                     .font(.callout.monospacedDigit())
             }
             Slider(
                 value: Binding(
-                    get: { binding.wrappedValue },
-                    set: { binding.wrappedValue = ($0 / step).rounded() * step }
+                    get: { value },
+                    set: { value = ($0 / step).rounded() * step }
                 ),
                 in: range,
                 step: step
             )
+        }
+        .onChange(of: value) { _, newValue in
+            if let scope {
+                scope.write(key, value: .double(newValue))
+            } else {
+                AppData.shared.settings[key] = .double(newValue)
+            }
+            AppData.shared.saveData()
+        }
+        .onAppear {
+            let current = currentValue
+            if value != current {
+                value = current
+            }
         }
     }
 }

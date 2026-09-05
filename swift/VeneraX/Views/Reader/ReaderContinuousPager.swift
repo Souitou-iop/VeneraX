@@ -47,10 +47,12 @@ struct ContinuousPager: View {
 
     @ViewBuilder
     private func items(viewport: CGSize) -> some View {
+        // 页面间距（readerPageSpacing，0–50；对齐上游连续模式页间距设置）。
+        let spacing = ReaderModel.continuousPageSpacing(model.setting("readerPageSpacing").doubleValue)
         if model.mode == .continuousTopToBottom {
-            LazyVStack(spacing: 0) { pageItems(viewport: viewport) }
+            LazyVStack(spacing: spacing) { pageItems(viewport: viewport) }
         } else {
-            LazyHStack(spacing: 0) { pageItems(viewport: viewport) }
+            LazyHStack(spacing: spacing) { pageItems(viewport: viewport) }
         }
     }
 

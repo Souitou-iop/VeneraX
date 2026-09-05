@@ -362,3 +362,33 @@ xcodebuild Debug iphonesimulator → BUILD SUCCEEDED（含修复）
 
 - 覆盖安装（simctl install 同 bundle id）会触发应用容器 UUID 迁移（83330E2A… → 79BC484D…），数据完整保留，但脚本中缓存的容器路径需重新获取。
 - 走查过程遵循用户要求，结束后已关闭模拟器。
+
+## 2026-09-06（二）：死设置全量接入阅读器（画廊 N 图/屏、铺满、连续页间距、跨章拼接开关）
+
+### 实现
+
+- **画廊 N 图/屏**：新增纯函数 `ReaderModel.galleryPagesPerScreen(twoPageMode:landscapeCount:portraitCount:isLandscape:)`（双页模式保底 2，横/竖屏 PicNumber 按方向取档、钳制 1–5）；`GalleryPager` 泛化为 `groupedGallery(pagesPerScreen:)`（原双页实现参数化，横/竖屏数量与首页单图设置全部真实驱动布局），旋转改变档位时当前页重新对齐到新分组。
+- **铺满屏幕**：`galleryFillScreen` 接入 `ReaderPageView`/`ZoomableScrollView`——fill 模式 imageView 占满视口 + `scaleAspectFill` 居中裁切（contentSize 等于视口，zoom 1 不可拖动；最大缩放可看全图）；contain 模式行为不变。
+- **连续页间距**：`readerPageSpacing` 接入 `ContinuousPager` 的 Lazy 栈 spacing（新增 `continuousPageSpacing` 钳制 0–50）。
+- **连续章节阅读开关**：`enableContinuousChapterReading` 关闭时 `loadContinuousChapter` 直接返回（预取/显式加载统一门控）——连续滚动限定当前章，章末翻页走 `switchChapter` 干净切换（含章节过渡屏）。
+- **`readerCenterPageOnTurn`（翻页后居中）与 `readerScrollSpeed`（滚速）结论**：前者在 Swift 连续实现中结构性满足（每页固定为视口尺寸并居中，不存在「短页贴顶」）；后者是上游桌面端概念，iOS 无鼠标滚轮，维持惰性（与上游移动端一致）。
+- 附带修复 **SettingSliderRow 视觉不同步**（与上轮 Toggle 同病：外部直读 binding 无重渲染，滑杆位置/数值文本在辅助功能路径下不更新）——改内部 `@State` + `onChange` 落盘 + `onAppear` 同步。
+
+### 测试
+
+```text
+VeneraKit: 183 tests, 0 failures, 1 skipped
+（新增 ReaderLayoutTests 10 项：每屏页数决策/方向档位/钳制、N 图分组与余数组/首页单图、组定位、页间距钳制含 NaN/Inf）
+xcodebuild Debug iphonesimulator → BUILD SUCCEEDED
+```
+
+### 模拟器走查（iPhone 17 / iOS 26.5，Komiic 真实源）
+
+- 竖屏数量=2 + 铺满开 → 画廊模式每屏 2 页并排（跨页图无缝拼合）、画面裁切铺满无黑边；滑杆数值即时同步。
+- 连续模式（漫画级覆盖）页面间距生效；关闭「连续章节阅读」后滚到 33/33 章末**不再拼接下一话**（无卷02 头、无加载指示）。
+- 漫画级「重置此漫画阅读设置」一键清除 469@Komiic 覆盖并即时回读全局生效值；走查后全局与漫画级设置均已恢复默认。
+
+### 自动化备注
+
+- `set_value` 工具对 SwiftUI Slider 的 AX 写入会把整数值写成布尔污染 appdata（readerScreenPicNumberFor*/readerPageSpacing 曾被写为 true/false）——**真实触摸（坐标点击/拖动）写入正确 double**；走查后已修正被污染键。此后对 Slider 一律使用坐标点击/拖动。
+- 模拟器走查后已关闭（terminate + shutdown + quit Simulator.app）。

@@ -1,23 +1,36 @@
 import SwiftUI
 import VeneraKit
 
-/// 画廊翻页引擎（gallery LTR/RTL/TTB）：TabView(.page) + 单页/双页并排缩放容器。
+/// 画廊翻页引擎（gallery LTR/RTL/TTB）：TabView(.page) + 单页/多页并排缩放容器。
+/// 每屏页数由生效设置驱动（对齐上游 gallery 模式）：双页模式保底 2，
+/// 横/竖屏 PicNumber 按当前方向取档（仅画廊模式）。
 struct GalleryPager: View {
     @Bindable var model: ReaderModel
     var chapterTransition: Binding<String?> = .constant(nil)
     var onTapToolbar: () -> Void = {}
     var chapterCommentsPage: AnyView? = nil
     var isShowingChapterCommentsPage: Binding<Bool> = .constant(false)
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var selectedPage = 0
     @State private var selectedSpread = 0
 
-    private var isTwoPage: Bool {
-        model.setting("readerTwoPageMode").boolValue ?? false
+    private var pagesPerScreen: Int {
+        ReaderModel.galleryPagesPerScreen(
+            twoPageMode: model.setting("readerTwoPageMode").boolValue ?? false,
+            landscapeCount: model.setting("readerScreenPicNumberForLandscape").intValue ?? 1,
+            portraitCount: model.setting("readerScreenPicNumberForPortrait").intValue ?? 1,
+            isLandscape: verticalSizeClass == .compact
+        )
+    }
+
+    /// 「铺满屏幕」：裁切填充而非留黑边（仅画廊模式）。
+    private var fillsScreen: Bool {
+        model.setting("galleryFillScreen").boolValue ?? false
     }
 
     var body: some View {
-        if isTwoPage {
-            twoPageGallery
+        if pagesPerScreen > 1 {
+            groupedGallery(pagesPerScreen: pagesPerScreen)
         } else {
             singlePageGallery
         }
@@ -33,6 +46,7 @@ struct GalleryPager: View {
                 ) {
                     ReaderPageView(
                         model: model, index: index,
+                        fillsScreen: fillsScreen,
                         chapterTransition: chapterTransition,
                         onTapToolbar: onTapToolbar
                     )
@@ -75,10 +89,10 @@ struct GalleryPager: View {
         model.pages.count
     }
 
-    private var twoPageGallery: some View {
+    private func groupedGallery(pagesPerScreen: Int) -> some View {
         let spreads = ReaderModel.gallerySpreads(
             pageCount: model.pages.count,
-            pagesPerSpread: 2,
+            pagesPerSpread: pagesPerScreen,
             showSingleImageOnFirstPage: showSingleImageOnFirstPage
         )
         let leadingSentinel = -1
@@ -103,6 +117,7 @@ struct GalleryPager: View {
                         ) {
                             ReaderPageView(
                                 model: model, index: pageIndex,
+                                fillsScreen: fillsScreen,
                                 chapterTransition: chapterTransition,
                                 onTapToolbar: onTapToolbar
                             )
@@ -129,12 +144,12 @@ struct GalleryPager: View {
             selectedSpread = ReaderModel.gallerySpreadIndex(
                 forImageIndex: model.currentIndex,
                 pageCount: model.pages.count,
-                pagesPerSpread: 2,
+                pagesPerSpread: pagesPerScreen,
                 showSingleImageOnFirstPage: showSingleImageOnFirstPage
             )
         }
         .onChange(of: selectedSpread) { _, newValue in
-            handleTwoPageSelection(
+            handleGroupedSelection(
                 newValue,
                 spreads: spreads,
                 leadingSentinel: leadingSentinel,
@@ -147,7 +162,7 @@ struct GalleryPager: View {
             let spread = ReaderModel.gallerySpreadIndex(
                 forImageIndex: newValue,
                 pageCount: model.pages.count,
-                pagesPerSpread: 2,
+                pagesPerSpread: pagesPerScreen,
                 showSingleImageOnFirstPage: showSingleImageOnFirstPage
             )
             if selectedSpread != spread { selectedSpread = spread }
@@ -157,7 +172,17 @@ struct GalleryPager: View {
             selectedSpread = ReaderModel.gallerySpreadIndex(
                 forImageIndex: model.currentIndex,
                 pageCount: model.pages.count,
-                pagesPerSpread: 2,
+                pagesPerSpread: pagesPerScreen,
+                showSingleImageOnFirstPage: showSingleImageOnFirstPage
+            )
+        }
+        // 旋转（横/竖屏档位不同）改变每屏页数后，把当前页重新对齐到新分组。
+        .onChange(of: pagesPerScreen) { _, newValue in
+            guard newValue > 1 else { return }
+            selectedSpread = ReaderModel.gallerySpreadIndex(
+                forImageIndex: model.currentIndex,
+                pageCount: model.pages.count,
+                pagesPerSpread: newValue,
                 showSingleImageOnFirstPage: showSingleImageOnFirstPage
             )
         }
@@ -167,7 +192,7 @@ struct GalleryPager: View {
         model.setting("showSingleImageOnFirstPage").boolValue ?? false
     }
 
-    private func handleTwoPageSelection(
+    private func handleGroupedSelection(
         _ newValue: Int,
         spreads: [ReaderModel.GallerySpread],
         leadingSentinel: Int,
@@ -262,11 +287,13 @@ struct ReaderPageView: UIViewRepresentable {
     @Bindable var model: ReaderModel
     let index: Int
     var continuous: Bool = false
+    var fillsScreen: Bool = false
     var chapterTransition: Binding<String?> = .constant(nil)
     var onTapToolbar: () -> Void = {}
 
     func makeUIView(context: Context) -> ZoomableScrollView {
         let view = ZoomableScrollView()
+        view.fillsScreen = fillsScreen
         view.onTapRatio = { [weak view] ratio in
             Task { @MainActor in
                 guard let view, view.window != nil else { return }
@@ -348,15 +375,24 @@ struct ReaderPageView: UIViewRepresentable {
     }
 }
 
-/// 缩放容器：初始 contain 适配，双击放大，单指点区翻页经 UIKit 手势转发。
+/// 缩放容器：初始 contain 适配（铺满屏幕为 aspect-fill 裁切），双击放大，
+/// 单指点区翻页经 UIKit 手势转发。
 final class ZoomableScrollView: UIView {
     var onTapRatio: ((CGFloat) -> Void)?
+    /// 铺满屏幕：aspect-fill 居中裁切，而非 contain 留黑边（对齐上游 fill 选项）。
+    var fillsScreen: Bool = false {
+        didSet {
+            guard fillsScreen != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
     private let scrollView = UIScrollView()
     private let imageView = UIImageView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         scrollView.delegate = self
+        scrollView.clipsToBounds = true
         scrollView.minimumZoomScale = 1
         scrollView.maximumZoomScale = 10
         scrollView.bouncesZoom = true
@@ -403,18 +439,32 @@ final class ZoomableScrollView: UIView {
         guard let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
         let widthScale = bounds.width / image.size.width
         let heightScale = bounds.height / image.size.height
-        let fitScale = min(widthScale, heightScale)
-        let size = CGSize(width: image.size.width * fitScale, height: image.size.height * fitScale)
-        scrollView.minimumZoomScale = 1
-        scrollView.maximumZoomScale = max(widthScale / fitScale, heightScale / fitScale, 4)
-        scrollView.zoomScale = 1
-        imageView.bounds = CGRect(origin: .zero, size: size)
-        centerImageView()
+        let minRatio = max(min(widthScale, heightScale), 0.0001)
+        if fillsScreen {
+            // 铺满：imageView 恰好占满视口，内容 scaleAspectFill 居中裁切
+            // （contentSize 等于视口，zoom 1 时不可拖动；放大到 max 比例可看全图）。
+            imageView.contentMode = .scaleAspectFill
+            imageView.clipsToBounds = true
+            imageView.bounds = CGRect(origin: .zero, size: bounds.size)
+            scrollView.maximumZoomScale = max(max(widthScale, heightScale) / minRatio, 4)
+            scrollView.zoomScale = 1
+            imageView.frame.origin = .zero
+            scrollView.contentSize = bounds.size
+        } else {
+            imageView.contentMode = .scaleAspectFit
+            imageView.clipsToBounds = false
+            let fitScale = min(widthScale, heightScale)
+            let size = CGSize(width: image.size.width * fitScale, height: image.size.height * fitScale)
+            scrollView.maximumZoomScale = max(max(widthScale, heightScale) / minRatio, 4)
+            scrollView.zoomScale = 1
+            imageView.bounds = CGRect(origin: .zero, size: size)
+            centerImageView()
+        }
     }
 
     private func centerImageView() {
-        let horizontal = max((scrollView.bounds.width - imageView.frame.width) / 2, 0)
-        let vertical = max((scrollView.bounds.height - imageView.frame.height) / 2, 0)
+        let horizontal = (scrollView.bounds.width - imageView.frame.width) / 2
+        let vertical = (scrollView.bounds.height - imageView.frame.height) / 2
         imageView.frame.origin = CGPoint(x: horizontal, y: vertical)
         scrollView.contentSize = imageView.frame.size
     }

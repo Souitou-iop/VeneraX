@@ -121,6 +121,24 @@ public final class ReaderModel {
         return spreads.firstIndex { $0.pageIndices.contains(imageIndex) } ?? 0
     }
 
+    /// 画廊每屏页数（对齐上游 gallery 模式的横/竖屏 PicNumber）：
+    /// 旧「双页模式」开关保底 2，横/竖屏 PicNumber 取当前方向档位，取二者最大值。
+    nonisolated public static func galleryPagesPerScreen(
+        twoPageMode: Bool,
+        landscapeCount: Int,
+        portraitCount: Int,
+        isLandscape: Bool
+    ) -> Int {
+        let configured = max(min(max(isLandscape ? landscapeCount : portraitCount, 1), 5), 1)
+        return max(twoPageMode ? 2 : 1, configured)
+    }
+
+    /// 连续模式页间距：钳制到设置档位范围 0...50，坏值回退 0。
+    nonisolated public static func continuousPageSpacing(_ raw: Double?) -> Double {
+        guard let raw, raw.isFinite else { return 0 }
+        return min(max(raw, 0), 50)
+    }
+
     public struct ContinuousPageItem: Identifiable, Hashable, Sendable {
         public let id: String
         public let epIndex: Int
@@ -395,6 +413,9 @@ public final class ReaderModel {
               !loadedChapterIndices.contains(ep),
               !attemptedContinuousChapterIndices.contains(ep),
               !continuousChapterLoadTasks.contains(ep) else { return }
+        // 「连续章节阅读」关闭时不拼接相邻章节：连续滚动限定在当前章内，
+        // 章末翻页走 switchChapter 的干净切换（对齐上游 joinChapters 语义）。
+        guard setting("enableContinuousChapterReading").boolValue ?? true else { return }
 
         continuousChapterLoadTasks.insert(ep)
         attemptedContinuousChapterIndices.insert(ep)
