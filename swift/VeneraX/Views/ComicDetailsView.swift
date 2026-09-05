@@ -114,7 +114,7 @@ struct ComicDetailsView: View {
                     Button {
                         addToReadLater()
                     } label: {
-                        Label("Read Later".tl, systemImage: "clock.badge.plus")
+                        Label("Read Later".tl, systemImage: "plus.circle")  // clock.badge.plus 不存在于 SF Symbols，运行时报 Invalid Configuration
                     }
 
                     if comic.sourceKey != "local" {
