@@ -402,6 +402,15 @@ public final class ComicSource: @unchecked Sendable {
         return result
     }
 
+    /// 各搜索项的默认值组合（对齐原版聚合搜索/搜索结果页把每个 option 的 defaultValue 传给 load）。
+    public func defaultSearchOptions() -> [String: String] {
+        var result: [String: String] = [:]
+        for option in loadSearchOptions() {
+            result[option.key] = option.defaultValue
+        }
+        return result
+    }
+
     /// 网络收藏夹列表（多文件夹源）。
     public func loadFavoriteFolders() async throws -> [(id: String, title: String)] {
         let json = try await invoke("ComicSource.sources.\(key).favorites.loadFolders()")

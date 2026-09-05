@@ -2,12 +2,18 @@ import SwiftUI
 import VeneraKit
 
 /// 多源聚合搜索视图（对齐原版 aggregated_search_page.dart）。
-/// 并发向所有已安装且支持搜索的源发起查询，以分源横滑网格聚合呈现。
+/// 按设置 searchSources 的键序并发向各源发起查询，以分源横滑网格聚合呈现；
+/// 页内可改写关键词重搜（写入共享搜索历史），各源结果渐进刷新。
 struct AggregatedSearchView: View {
-    let keyword: String
-
+    @State private var keyword: String
+    @State private var searchField: String
     @State private var sourceResults: [SourceSearchResult] = []
     @State private var isSearching = true
+
+    init(keyword: String) {
+        _keyword = State(initialValue: keyword)
+        _searchField = State(initialValue: keyword)
+    }
 
     struct SourceSearchResult: Identifiable, Sendable {
         var id: String { source.key }
@@ -17,18 +23,40 @@ struct AggregatedSearchView: View {
         var isLoading: Bool = true
     }
 
-    private var searchableSources: [ComicSource] {
-        AppServices.shared.sources.filter { $0.searchAvailable }
+    var body: some View {
+        Group {
+            if sourceResults.isEmpty && !isSearching {
+                ContentUnavailableView {
+                    Label("No search sources selected".tl, systemImage: "magnifyingglass")
+                } description: {
+                    Text("Enable sources under Settings > Search Sources".tl)
+                }
+            } else {
+                sections
+            }
+        }
+        .navigationTitle(keyword)
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(
+            text: $searchField,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: Text("Search".tl)
+        )
+        .onSubmit(of: .search) { reSearch(from: searchField) }
+        .task(id: keyword) {
+            await performAggregatedSearch()
+        }
     }
 
-    var body: some View {
+    private var sections: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
                 ForEach(sourceResults) { result in
                     sourceSection(result)
                 }
 
-                if !isSearching && sourceResults.allSatisfy({ $0.comics.isEmpty && $0.error == nil }) {
+                if !isSearching && !sourceResults.isEmpty
+                    && sourceResults.allSatisfy({ $0.comics.isEmpty && $0.error == nil }) {
                     ContentUnavailableView {
                         Label("No search results found".tl, systemImage: "magnifyingglass")
                     } description: {
@@ -39,34 +67,30 @@ struct AggregatedSearchView: View {
             }
             .padding(.vertical, 12)
         }
-        .navigationTitle(keyword)
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await performAggregatedSearch()
-        }
+        .id(keyword)
     }
 
     @ViewBuilder
     private func sourceSection(_ result: SourceSearchResult) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(verbatim: result.source.name)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+            // 原版点击整个分区头跳转单源结果页，这里以整行链接等价实现。
+            NavigationLink(value: ComicTarget.search(result.source.key, keyword)) {
+                HStack {
+                    Text(verbatim: result.source.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
 
-                Spacer()
+                    Spacer()
 
-                if !result.comics.isEmpty {
-                    NavigationLink(value: ComicTarget.search(result.source.key, keyword)) {
-                        HStack(spacing: 2) {
-                            Text("More".tl)
-                            Image(systemName: "chevron.right")
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 2) {
+                        Text("More".tl)
+                        Image(systemName: "chevron.right")
                     }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
             }
+            .buttonStyle(.plain)
             .padding(.horizontal, 16)
 
             if result.isLoading {
@@ -112,19 +136,36 @@ struct AggregatedSearchView: View {
         }
     }
 
+    private func reSearch(from text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        AppData.shared.addSearchHistory(trimmed)
+        searchField = trimmed
+        keyword = trimmed
+    }
+
     @MainActor
     private func performAggregatedSearch() async {
-        isSearching = true
-        let sources = searchableSources
-        var results = sources.map { SourceSearchResult(source: $0) }
-        sourceResults = results
+        let searchKeyword = keyword
+        guard !searchKeyword.trimmingCharacters(in: .whitespaces).isEmpty else {
+            sourceResults = []
+            isSearching = false
+            return
+        }
 
-        let searchKW = keyword
+        isSearching = true
+        let sources = ComicSourceManager.shared.aggregatedSearchSources()
+        sourceResults = sources.map { SourceSearchResult(source: $0) }
+
         await withTaskGroup(of: (String, [Comic]?, String?).self) { group in
             for source in sources {
                 group.addTask {
                     do {
-                        let page = try await source.search(keyword: searchKW, page: 1, options: [:])
+                        let page = try await source.search(
+                            keyword: searchKeyword,
+                            page: 1,
+                            options: source.defaultSearchOptions()
+                        )
                         return (source.key, page.comics, nil)
                     } catch {
                         return (source.key, nil, error.localizedDescription)
@@ -133,14 +174,19 @@ struct AggregatedSearchView: View {
             }
 
             for await (key, comics, error) in group {
-                if let idx = results.firstIndex(where: { $0.source.key == key }) {
-                    results[idx].isLoading = false
-                    results[idx].comics = comics ?? []
-                    results[idx].error = error
-                }
+                // 关键词已被改写（任务被取消）时丢弃迟到的结果，避免写入新一轮的状态。
+                guard !Task.isCancelled,
+                      let idx = sourceResults.firstIndex(where: { $0.source.key == key }) else { continue }
+                sourceResults[idx].isLoading = false
+                sourceResults[idx].comics = comics ?? []
+                sourceResults[idx].error = error.map(Self.friendlyError)
             }
         }
-        sourceResults = results
+        guard !Task.isCancelled else { return }
         isSearching = false
+    }
+
+    private static func friendlyError(_ message: String) -> String {
+        message.lowercased().contains("cloudflare") ? "Cloudflare verification required".tl : message
     }
 }

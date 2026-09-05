@@ -261,3 +261,29 @@ com.apple.DocumentManager.Service [TAP] Couldn't get FPItem from node for
 - 根因：空状态条件含 `!isChecking`，检查开始/结束时在「无更新卡片」与空的「已更新漫画」分区之间来回切换，List 的 withAnimation 交叉淡化把两份文字叠影渲染（用户截图实证）。
 - 修复：空状态只依赖 `updatedComics.isEmpty`，结构全程稳定；检查中的反馈由头部按钮（原位旋转指示）与进度文案承担。
 - 模拟器复测（iOS 26.5）：点击「立即检查」后任务正常创建/完成，检查中与结束后均无叠影，页面仅显示头部卡片与空状态卡片。
+
+## 2026-09-05（晚）：聚合搜索对齐上游（并行分支 feature/aggregated-search）
+
+### 变更范围
+
+- 聚合搜索页现按设置 `searchSources` 的键序筛选并排序参与搜索的源（此前无视该设置直接搜索全部已装源，设置页「搜索源」编辑器形同虚设）；设置列表为空 = 空态不搜索（与探索页等可见列表「空=空态」语义一致）。新增 `ComicSourceManager.aggregatedSearchSources()`。
+- 聚合搜索页支持页内改写关键词重搜（对齐原版 SliverSearchBar）：`.searchable` 常驻导航栏、提交写入共享搜索历史、`task(id:)` 驱动重查并丢弃被取消轮次的迟到结果；各源结果渐进刷新（此前需等全部源完成后才一次性呈现）。
+- 各源搜索现在传默认搜索项：新增 `ComicSource.defaultSearchOptions()`；`ComicListView` 的 `.search` 加载路径在 options 为空时回填默认值，同时修复 SearchView 提交与聚合页 More 链接都传空 options 的问题（对齐原版把 defaultValue 传给 load）。
+- 错误文案包含 cloudflare 时映射为「需要Cloudflare验证」；分区头整行可点进单源结果页（对齐原版整分区 InkWell）。
+- 新增本地化键：No search sources selected / Enable sources under Settings > Search Sources（zh_CN/zh_TW）。
+
+### 验证结果
+
+```text
+VeneraKit: 161 tests, 0 failures, 1 skipped
+（含新增 AggregatedSearchTests 6 项：设置键序与未知键跳过、去重、非搜索源过滤、空列表空态、默认项解析、默认项传递给 load）
+swift test --disable-sandbox（worktree /Volumes/SanDisk/Projects/VeneraX-parallel，rebase 后基于 b7ffa321）
+xcodebuild -project swift/VeneraX.xcodeproj -scheme VeneraX -sdk iphonesimulator \
+  -configuration Debug -derivedDataPath /Volumes/SanDisk/Developer/Xcode/DerivedData/VeneraX-parallel \
+  CODE_SIGNING_ALLOWED=NO build → BUILD SUCCEEDED
+```
+
+### 边界说明
+
+- 本轮在独立 git worktree（`feature/aggregated-search` 分支）进行，未触碰主工作区与模拟器（当时模拟器正被另一线程做 UI 走查）；页内重搜、空态、More 跳转等 UI 交互留待合并后模拟器走查。
+- `swift test` 仅覆盖 VeneraKit；聚合页视图层（AggregatedSearchView）不在单测范围，编译由 App Debug 构建保障。

@@ -321,7 +321,9 @@ struct ComicListView: View {
                 }
                 currentPage += 1
             case .search(_, let keyword, let options):
-                let (pageComics, pageMax) = try await source.search(keyword: keyword, page: currentPage, options: options)
+                // 未显式指定搜索项时回填默认值（聚合页 More 链接等入口传空 options）。
+                let effectiveOptions = options.isEmpty ? source.defaultSearchOptions() : options
+                let (pageComics, pageMax) = try await source.search(keyword: keyword, page: currentPage, options: effectiveOptions)
                 let filtered = BlockListFilter.filterComics(pageComics)
                 comics.append(contentsOf: filtered)
                 if pageMax == nil {

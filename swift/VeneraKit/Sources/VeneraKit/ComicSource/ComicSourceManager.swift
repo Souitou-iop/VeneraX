@@ -285,6 +285,23 @@ public final class ComicSourceManager: @unchecked Sendable {
         AppData.shared.saveData()
     }
 
+    /// 聚合搜索的源列表（对齐原版 aggregated_search_page.dart）：
+    /// 按设置 searchSources 的键序返回已安装且支持搜索的源，未列入或无效的键跳过；
+    /// 设置为空列表时不搜索任何源（与探索页等可见列表「空=空态」语义一致）。
+    public func aggregatedSearchSources() -> [ComicSource] {
+        let keys = AppData.shared.settings["searchSources"].arrayValue?.compactMap { $0.stringValue } ?? []
+        var byKey: [String: ComicSource] = [:]
+        for source in all() where source.searchAvailable {
+            byKey[source.key] = source
+        }
+        var seen = Set<String>()
+        return keys.compactMap { key in
+            guard !seen.contains(key), let source = byKey[key] else { return nil }
+            seen.insert(key)
+            return source
+        }
+    }
+
     /// 移除失效页键（对齐 `_validatePages`：源被删后清理残留键）。
     public func validateVisiblePageLists() {
         let settings = AppData.shared.settings
