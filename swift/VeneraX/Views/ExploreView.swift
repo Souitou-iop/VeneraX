@@ -258,11 +258,21 @@ struct ExplorePagesSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var availablePages: [ComicSource.ExplorePage] = []
     @State private var selectedTitles: Set<String> = []
+    @State private var filter = ""
+
+    private var filteredSources: [ComicSource] {
+        let keyword = filter.trimmingCharacters(in: .whitespaces)
+        guard !keyword.isEmpty else { return AppServices.shared.sources }
+        return AppServices.shared.sources.filter { source in
+            source.name.localizedCaseInsensitiveContains(keyword)
+                || source.explorePages.contains { $0.title.localizedCaseInsensitiveContains(keyword) }
+        }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(AppServices.shared.sources, id: \.key) { source in
+                ForEach(filteredSources, id: \.key) { source in
                     Section(source.name) {
                         ForEach(source.explorePages, id: \.index) { page in
                             HStack {
@@ -288,6 +298,8 @@ struct ExplorePagesSettingsSheet: View {
             }
             .navigationTitle("Explore Pages".tl)
             .navigationBarTitleDisplayMode(.inline)
+            // 源多时靠搜索直达：按源名称或页面标题过滤。
+            .searchable(text: $filter, prompt: "Search source or page".tl)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done".tl) { dismiss() }

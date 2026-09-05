@@ -384,6 +384,10 @@ struct TasksView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Text(verbatim: followUpdateFolderLabel(task.folders))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
             ProgressView(value: task.progress)
                 .tint(.accentColor)
 
@@ -557,7 +561,7 @@ struct TasksView: View {
                     .lineLimit(1)
             }
             if task.failureCount > 0 {
-                Text("Failures: \(task.failureCount)".tl)
+                Text("Failures: @n".tl.replacingOccurrences(of: "@n", with: String(task.failureCount)))
                     .font(.caption2)
                     .foregroundStyle(.orange)
                 ForEach(task.failures.prefix(2), id: \.self) { failure in

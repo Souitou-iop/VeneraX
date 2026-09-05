@@ -167,6 +167,23 @@ extension MoreFeaturesExtendedTests {
         XCTAssertEqual(source.headers()["Authorization"], "Basic YWxpY2U6cEBzcw==")
     }
 
+    func testSuggestedScriptFilenameHandlesQueryAndMissingSuffix() {
+        XCTAssertEqual(
+            SourceURL.suggestedScriptFilename("http://localhost:8080/source.js?token=abc"),
+            "source.js"
+        )
+        XCTAssertEqual(
+            SourceURL.suggestedScriptFilename("https://example.com/p/lib.js;jsessionid=x"),
+            "lib.js"
+        )
+        XCTAssertEqual(
+            SourceURL.suggestedScriptFilename("https://example.com/get?file=source.js"),
+            "get.js"
+        )
+        XCTAssertTrue(SourceURL.suggestedScriptFilename("https://example.com/").hasSuffix(".js"))
+        XCTAssertTrue(SourceURL.suggestedScriptFilename("not a url at all").hasSuffix(".js"))
+    }
+
     func testSourceURLAcceptsLocalhostAndIPv6ButRejectsOtherSchemes() {
         XCTAssertTrue(SourceURL.isValid("http://localhost:8080/source.js"))
         XCTAssertTrue(SourceURL.isValid("https://[::1]/source.js"))

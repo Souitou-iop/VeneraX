@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import VeneraKit
 
 /// 漫画源管理与在线市场：已安装源管理（支持拖拽排序与滑动删除）+ 源市场在线目录 + 一键安装与批量更新。
@@ -10,6 +11,7 @@ struct ComicSourcesView: View {
     @State private var isCheckingCatalog = false
     @State private var installURL = ""
     @State private var showInstaller = false
+    @State private var showLocalImporter = false
     @State private var isInstalling = false
     @State private var message: String?
     @State private var error: String?
@@ -49,6 +51,12 @@ struct ComicSourcesView: View {
                         }
 
                         Button {
+                            showLocalImporter = true
+                        } label: {
+                            Label("Install from file".tl, systemImage: "folder.badge.plus")
+                        }
+
+                        Button {
                             checkCatalogUpdates()
                         } label: {
                             Label("Check Updates".tl, systemImage: "arrow.clockwise")
@@ -84,6 +92,12 @@ struct ComicSourcesView: View {
             Button("Cancel".tl, role: .cancel) {}
         } message: {
             Text("Enter the .js script URL of a comic source".tl)
+        }
+        .fileImporter(
+            isPresented: $showLocalImporter,
+            allowedContentTypes: [.item]
+        ) { result in
+            installFromLocalFile(result)
         }
         .overlay {
             if isInstalling {
@@ -296,6 +310,37 @@ struct ComicSourcesView: View {
         }
     }
 
+    /// 本地 .js 脚本安装：不经过网络，直接读取用户选择的文件。
+    private func installFromLocalFile(_ result: Result<URL, Error>) {
+        switch result {
+        case .failure(let error):
+            self.error = error.localizedDescription
+        case .success(let url):
+            guard url.pathExtension.lowercased() == "js" else {
+                self.error = "Please select a .js source script".tl
+                return
+            }
+            let needsAccess = url.startAccessingSecurityScopedResource()
+            defer { if needsAccess { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let js = try String(contentsOf: url, encoding: .utf8)
+                isInstalling = true
+                Task {
+                    defer { isInstalling = false }
+                    do {
+                        _ = try await ComicSourceManager.shared.install(js: js, fileName: url.lastPathComponent)
+                        sources = AppServices.shared.sources
+                        message = "Installed".tl
+                    } catch {
+                        self.error = error.localizedDescription
+                    }
+                }
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
     private func installFromURL() async {
         let urlString = installURL.trimmingCharacters(in: .whitespaces)
         guard !urlString.isEmpty else { return }
@@ -319,7 +364,7 @@ struct ComicSourcesView: View {
             self.error = "Invalid script content"
             return
         }
-        let fileName = URL(string: urlString)?.lastPathComponent ?? "source_\(Int(Date().timeIntervalSince1970)).js"
+        let fileName = SourceURL.suggestedScriptFilename(sourceURL.url)
         do {
             _ = try await ComicSourceManager.shared.install(js: js, fileName: fileName)
             sources = AppServices.shared.sources

@@ -176,3 +176,72 @@ data/venera.db.history_events      = 16813
 ```
 
 结论：最新构建已安装到指定模拟器；真实备份已通过应用内导入入口完成导入，任务状态和数据库内容均已核实。模拟器按当前测试规范保持运行，后续由操作者决定关闭时机。
+
+## 2026-09-05（晚）：P0–P2 打磨——追更范围与周期、源管理、边界回归
+
+### 变更范围
+
+**P1a 追更范围与检查周期（对齐上游 follow_update_scope.dart）**
+
+- 新增 `swift/VeneraKit/Sources/VeneraKit/Model/FollowUpdateScope.swift`：
+  - 范围：`followUpdatesAllFolders` / `followUpdatesFolders`（设备本地，不入 WebDAV 同步，键已加入 `AppData.disableSync`）；
+  - 周期：`followUpdatesIntervalHours`（1/3/6/12/24/48/72/168，默认 24，随同步）、`followUpdatesCheckOnStart`（默认开）、`followUpdatesFixedTime`（HH:mm 时刻门控，坏值放行）；
+  - 旧单收藏夹键 `followUpdatesFolder` 一次性迁移（独立标志防重播种）；
+  - 纯函数 `resolveFolders` / `parseFixedTime` / `isPastFixedTime` / `isDue` 可测。
+- `FollowUpdates.swift`：任务记录新增 `folders`（旧记录向后兼容解码）；`startCheck(folders:manual:)` 支持范围启动、跨收藏夹去重、自动检查按 `isDue` 过滤；新增 `startChecker()`（启动检查 + 每 10 分钟周期跳 + DataSync 忙碌等待）与 `cancelChecks(forFolder:)`；`deleteFolder` 删除收藏夹前取消覆盖它的运行中检查。
+- `AppServices.boot` 挂接 `startChecker()`（已实测：启动后 `followUpdatesFoldersMigrated=true` 落盘）。
+- `FollowUpdatesView`：新增设置表（范围开关、收藏夹多选、周期选择、启动检查、固定时刻 DatePicker），确认时统一应用；未配置时空状态提示；范围未配置时「立即检查」先打开设置表。
+- **修复走查发现的 bug**：保存后页面空状态不刷新（`isConfigured` 为非观察计算属性）→ sheet 增加 `onDismiss` 重载，已复测通过。
+
+**P1b 阅读器边界回归（代码级）**
+
+- 跳页输入钳制（0/999/-5）、连续模式跳转目标语义、双页 spread 配对、隐藏章节跳过、预载窗口边界、解码位图缓存字节预算：既有测试全部通过（详见 MoreFeaturesTests / RobustnessStressTests）。
+- RTL 实现核查：`galleryRightToLeft`/`continuousRightToLeft` 在点区分发（ReaderTapZones）与布局方向（ReaderPagers）均已处理。
+- 旋转/双页渲染/小屏指示器等视觉项留待真机走查。
+
+**P2 源管理打磨**
+
+- 源脚本 URL 文件名推导修复：新增 `SourceURL.suggestedScriptFilename`（剥离查询参数/分号参数、无 `.js` 后缀自动补全、空路径回退时间戳），替换 `ComicSourcesView.installFromURL` 中的裸 `lastPathComponent`，附单测。
+- 相关源弹窗（RelatedSourcesSheet）失败不再伪装成「无结果」：统计失败源数量并提供重试按钮。
+- 探索页设置表（ExplorePagesSettingsSheet）新增搜索过滤（按源名称或页面标题）。
+- 漫画源新增「从文件安装」入口（fileImporter 单选，仅接受 .js，安全作用域读取后走既有 `ComicSourceManager.install`）。
+- 补齐 TasksView 遗留的 6 条中文/繁体文案；修复 `Failures:` 插值串无法命中翻译键的问题（改用 @n 占位符）。
+
+### 验证结果
+
+```text
+VeneraKit: 155 tests, 0 failures, 1 skipped
+swift test --package-path swift/VeneraKit --disable-sandbox
+```
+
+```text
+xcodebuild -project swift/VeneraX.xcodeproj -scheme VeneraX -sdk iphonesimulator \
+  -configuration Debug -derivedDataPath /Volumes/SanDisk/Developer/Xcode/DerivedData/VeneraX-p12 \
+  CODE_SIGNING_ALLOWED=NO build → BUILD SUCCEEDED
+Info.plist / Extension Info.plist: plutil -lint OK
+git diff --check: passed
+```
+
+### 模拟器走查（iPhone 17, iOS 26.5, UDID 233EA1C2-1DB4-4D5B-9ED1-E2C30F951A7E）
+
+- 安装并启动本构建，导入的真实数据库（2814 漫画等）完好，重启后继续阅读/收藏/追更入口正常。
+- 追更页：未配置空状态显示「请在设置中选择要追踪的收藏夹」；设置表渲染正常（全部收藏夹开关、收藏夹多选列表、「检查周期：每 24 小时」等本地化文案）；开关「全部收藏夹」→ 保存 → `appdata.json` 中 `followUpdatesAllFolders=true` 落盘；空状态正确切换为「无更新」。
+- 漫画源「…」菜单：从 URL 安装 / 从文件安装 / 检查更新 三项齐全。
+
+### Browse Files 单选导入复测结论（P0 尾巴）
+
+- 系统 Files 选择器可打开、可导航进入「我的 iPhone/VeneraX」目录，点击注册正常；
+- 点击 `.venera` 文件后系统层报错，模拟器 syslog 证据：
+
+```text
+com.apple.DocumentManager.Service [TAP] Couldn't get FPItem from node for
+'<FIDSNode … '1788594154.venera', file:///.file/id=16777231.10309153 …>' Continuing
+```
+
+- 结论：这是 iOS 模拟器 FileProvider 无法为应用自身 Documents 文件生成 FPItem 的系统限制（发生在 fileImporter 回调之前），非应用代码缺陷；应用内「On This iPhone」导入路径不受影响（上一轮已用真实备份完整验收）。外部选择器路径（Downloads/iCloud/第三方 provider）与真机验收留待真机执行。
+
+### 遗留事项
+
+- HTTP Basic Auth 源的真实网络请求往返（构造逻辑已有单测）。
+- 实时活动真机验收（DEVELOPMENT_TEAM 未配置）。
+- 模拟器保持 Booted（按用户要求，未关闭）。

@@ -45,3 +45,22 @@ public struct SourceURL: Sendable, Equatable {
         return true
     }
 }
+
+extension SourceURL {
+    /// 从源脚本 URL 推导保存文件名（对齐上游：带查询参数的 URL 不能把
+    /// 参数带进文件名，非 .js 结尾的路径补上后缀，推导不出时用时间戳）。
+    /// 纯函数，便于测试。
+    public static func suggestedScriptFilename(_ rawURL: String) -> String {
+        let fallback = "source_\(Int(Date().timeIntervalSince1970)).js"
+        guard var name = URL(string: rawURL)?.lastPathComponent.trimmingCharacters(in: .whitespaces),
+              !name.isEmpty else {
+            return fallback
+        }
+        // lastPathComponent 已排除 ?query/#fragment；再处理路径内残留的分号参数。
+        if let parameterStart = name.firstIndex(of: ";") {
+            name = String(name[..<parameterStart])
+        }
+        if name.isEmpty { return fallback }
+        return name.hasSuffix(".js") ? name : "\(name).js"
+    }
+}

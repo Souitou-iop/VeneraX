@@ -31,6 +31,9 @@ public struct FollowUpdateTask: Identifiable, Codable, Sendable {
 
     public let id: String
     public let manual: Bool
+    /// 本次检查覆盖的收藏夹。多收藏夹支持之前的历史记录没有该字段，
+    /// 解码为 nil，由 UI 回退为通用文案。
+    public var folders: [String]?
     public let createdAt: Date
     public var finishedAt: Date?
     public var status: Status
@@ -46,6 +49,7 @@ public struct FollowUpdateTask: Identifiable, Codable, Sendable {
     public init(
         id: String,
         manual: Bool,
+        folders: [String]? = nil,
         createdAt: Date = Date(),
         finishedAt: Date? = nil,
         status: Status = .running,
@@ -56,6 +60,7 @@ public struct FollowUpdateTask: Identifiable, Codable, Sendable {
     ) {
         self.id = id
         self.manual = manual
+        self.folders = folders
         self.createdAt = createdAt
         self.finishedAt = finishedAt
         self.status = status
@@ -75,6 +80,8 @@ public final class FollowUpdatesManager: @unchecked Sendable {
 
     private let stateLock = NSLock()
     private var checking = false
+    private var checkerStarted = false
+    private var checkerTask: Task<Void, Never>?
     private var tasks: [FollowUpdateTask]
     private var jobs: [String: Task<Void, Never>] = [:]
     private let persistenceKey = "venera.followUpdateTasks.v1"
@@ -165,9 +172,13 @@ public final class FollowUpdatesManager: @unchecked Sendable {
         LocalFavoritesManager.shared.clearNewUpdateFlag(folder: folder, id: id, type: type)
     }
 
-    /// 启动一个可追踪的全量追更任务。重复启动时返回当前运行中的任务摘要。
+    /// 启动一次覆盖 `folders` 的追更检查。同时只允许一个检查在跑：追更
+    /// 范围现在是唯一的用户级设置，运行中再触发会并入当前任务，而不是
+    /// 启动一个会写同一批行的重叠检查。重复启动返回运行中的任务摘要。
     @discardableResult
-    public func startCheckAllFolders(manual: Bool = true) -> FollowUpdateTask? {
+    public func startCheck(folders: [String], manual: Bool) -> FollowUpdateTask? {
+        guard !folders.isEmpty else { return nil }
+
         stateLock.lock()
         if let running = tasks.first(where: { $0.status == .running }) {
             stateLock.unlock()
@@ -177,12 +188,19 @@ public final class FollowUpdatesManager: @unchecked Sendable {
 
         guard beginChecking() else { return activeTasks().first }
 
-        let folders = LocalFavoritesManager.shared.getFolders()
+        // 手动检查忽略上次检查时间；自动检查只查到期的漫画（上游
+        // ignoreCheckTime 语义）。收藏夹出现的先后即库内顺序。
+        var seen = Set<String>()
         var allComics: [(folder: String, item: FavoriteItem)] = []
         for folder in folders {
             LocalFavoritesManager.shared.makeFollowFolder(folder)
             let items = LocalFavoritesManager.shared.getComics(folder)
             for item in items where item.type != 0 {
+                guard seen.insert("\(item.id)@\(item.type)").inserted else { continue }
+                if !manual,
+                   !FollowUpdateScope.isDue(lastCheck: item.lastCheckTime) {
+                    continue
+                }
                 allComics.append((folder, item))
             }
         }
@@ -190,6 +208,7 @@ public final class FollowUpdatesManager: @unchecked Sendable {
         let task = FollowUpdateTask(
             id: UUID().uuidString,
             manual: manual,
+            folders: folders,
             total: allComics.count
         )
 
@@ -207,16 +226,70 @@ public final class FollowUpdatesManager: @unchecked Sendable {
         return task
     }
 
+    /// 按当前追更范围启动检查；范围为空（未配置）时什么都不做。
+    @discardableResult
+    public func startScopedCheck(manual: Bool) -> FollowUpdateTask? {
+        startCheck(folders: FollowUpdateScope.folders, manual: manual)
+    }
+
+    /// 用户把某个收藏夹移出追更范围（或删除它）时，取消覆盖它的运行中
+    /// 检查——这被视为明确的取消，任务之后不得再继续。
+    public func cancelChecks(forFolder folder: String) {
+        let ids = allTasks().filter { $0.status == .running && $0.folders?.contains(folder) == true }.map(\.id)
+        for id in ids {
+            cancelCheck(id: id)
+        }
+    }
+
+    /// 自动检查的调度器：启动检查（可选）+ 每 10 分钟一跳的周期门。
+    /// 周期跳本身很廉价——到不到期由每部漫画的上次检查时间决定，没有
+    /// 到期漫画的那一跳不会启动任务。
+    public func startChecker() {
+        stateLock.lock()
+        if checkerStarted {
+            stateLock.unlock()
+            return
+        }
+        checkerStarted = true
+        stateLock.unlock()
+
+        FollowUpdateScope.migrateLegacyIfNeeded()
+
+        checkerTask = Task { [weak self] in
+            guard let self else { return }
+            // 启动检查是可选项；刚启动时先让 DataSync/收藏库安顿下来。
+            try? await Task.sleep(for: .seconds(5))
+            if FollowUpdateScope.checkOnStart {
+                await self.runAutomaticCheck()
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(600))
+                guard FollowUpdateScope.isPastFixedTime(FollowUpdateScope.fixedTime) else { continue }
+                await self.runAutomaticCheck()
+            }
+        }
+    }
+
+    private func runAutomaticCheck() async {
+        // 备份下载/应用会原位恢复收藏库；等它结束再检查，避免写交错。
+        while !DataSyncManager.shared.activeTasks().isEmpty {
+            try? await Task.sleep(for: .seconds(1))
+            if Task.isCancelled { return }
+        }
+        guard !FollowUpdateScope.folders.isEmpty else { return }
+        await checkAllFolders(force: false)
+    }
+
     private func job(for id: String) -> Task<Void, Never>? {
         stateLock.lock()
         defer { stateLock.unlock() }
         return jobs[id]
     }
 
-    /// 等待一次追更任务完成。保留这个 API 兼容原页面和既有调用方。
+    /// 等待一次追更检查完成。保留这个 API 兼容原页面和既有调用方；
+    /// 范围为空（未配置）时直接返回。
     public func checkAllFolders(force: Bool = false) async {
-        let task = startCheckAllFolders(manual: force)
-        guard let task else { return }
+        guard let task = startCheck(folders: FollowUpdateScope.folders, manual: force) else { return }
         guard let job = job(for: task.id) else { return }
         await withTaskCancellationHandler(operation: {
             await job.value

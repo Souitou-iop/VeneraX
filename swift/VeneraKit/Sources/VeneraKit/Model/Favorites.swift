@@ -285,6 +285,9 @@ public final class LocalFavoritesManager: @unchecked Sendable {
     }
 
     public func deleteFolder(_ name: String) throws {
+        // 删除前先取消覆盖该收藏夹的运行中追更检查，避免任务继续写已
+        // 不存在的表。
+        FollowUpdatesManager.shared.cancelChecks(forFolder: name)
         let escaped = name.replacingOccurrences(of: "\"", with: "\"\"")
         try db.execute("drop table if exists \"\(escaped)\";")
         try? db.execute("delete from folder_order where folder_name = ?;", [.text(name)])

@@ -10,6 +10,7 @@ struct RelatedSourcesSheet: View {
     @State private var searchKeyword: String = ""
     @State private var results: [Comic] = []
     @State private var isSearching = false
+    @State private var failedSourceKeys: [String] = []
     @State private var selectedTargetComic: Comic?
 
     private var otherSearchableSources: [ComicSource] {
@@ -50,10 +51,15 @@ struct RelatedSourcesSheet: View {
                         }
                         .padding(.vertical, 8)
                     } else if results.isEmpty {
-                        Text("No matching comics found in other sources".tl)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 4)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("No matching comics found in other sources".tl)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 4)
+                            if !failedSourceKeys.isEmpty {
+                                retryRow
+                            }
+                        }
                     } else {
                         ForEach(results, id: \.id) { result in
                             Button {
@@ -90,6 +96,9 @@ struct RelatedSourcesSheet: View {
                                 }
                             }
                         }
+                    }
+                    if !results.isEmpty && !failedSourceKeys.isEmpty {
+                        retryRow
                     }
                 } header: {
                     Text("Results in other sources (\(results.count))".tl)
@@ -133,27 +142,48 @@ struct RelatedSourcesSheet: View {
         let sources = otherSearchableSources
 
         let searchKW = kw
-        let allFound = await withTaskGroup(of: [Comic]?.self) { group -> [Comic] in
+        let allFound = await withTaskGroup(of: (String, [Comic]?).self) { group -> [Comic] in
             for source in sources {
                 group.addTask {
                     do {
                         let page = try await source.search(keyword: searchKW, page: 1, options: [:])
-                        return page.comics
+                        return (source.key, page.comics)
                     } catch {
-                        return nil
+                        return (source.key, nil)
                     }
                 }
             }
 
             var listAccum: [Comic] = []
-            for await list in group {
+            var failed: [String] = []
+            for await (key, list) in group {
                 if let list {
                     listAccum.append(contentsOf: list)
+                } else {
+                    failed.append(key)
                 }
             }
+            failedSourceKeys = failed
             return listAccum
         }
         results = allFound
         isSearching = false
+    }
+
+    /// 部分源搜索失败时给出明确的失败数与重试入口，而不是把失败伪装
+    /// 成「无结果」。
+    private var retryRow: some View {
+        HStack {
+            Text("@a sources failed".tl.replacingOccurrences(of: "@a", with: String(failedSourceKeys.count)))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                Task { await performSearch() }
+            } label: {
+                Label("Retry".tl, systemImage: "arrow.clockwise")
+            }
+            .font(.caption)
+        }
     }
 }

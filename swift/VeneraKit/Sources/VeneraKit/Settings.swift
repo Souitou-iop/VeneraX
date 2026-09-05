@@ -148,6 +148,12 @@ public enum Settings {
         "appLockType": .string("biometric"), // biometric, pin, password, pattern
         "appLockCredential": .null, // {salt, hash}
         "followUpdatesFolder": .null,
+        "followUpdatesFolders": .array([]),
+        "followUpdatesAllFolders": .bool(false),
+        "followUpdatesFoldersMigrated": .bool(false),
+        "followUpdatesIntervalHours": .int(24),
+        "followUpdatesCheckOnStart": .bool(true),
+        "followUpdatesFixedTime": .string(""),
         "comicSpecificSettings": .object([:]),
         "deviceSpecificSettings": .object([:]),
 

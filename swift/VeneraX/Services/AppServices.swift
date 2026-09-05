@@ -86,6 +86,7 @@ final class AppServices {
         // Sources are now available, so interrupted pre-translation jobs can
         // safely rebuild their page lists and continue from persisted prefixes.
         PreTranslationTaskManager.shared.resumePendingTasks()
+        FollowUpdatesManager.shared.startChecker()
         runStartupMaintenance()
 
         if SelfTest.shouldRun() {
