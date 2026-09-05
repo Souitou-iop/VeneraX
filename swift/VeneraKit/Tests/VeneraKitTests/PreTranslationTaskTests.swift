@@ -129,7 +129,7 @@ final class PreTranslationTaskTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(20))
         }
 
-        XCTAssertEqual(finished.status, .completed)
+        XCTAssertEqual(finished.status, .failed)
         XCTAssertTrue(finished.hasFailures)
         XCTAssertEqual(finished.chapters.count, 2)
         for chapter in finished.chapters {
@@ -149,7 +149,7 @@ final class PreTranslationTaskTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(20))
         }
-        XCTAssertEqual(retried.status, .completed)
+        XCTAssertEqual(retried.status, .failed)
         XCTAssertEqual(retried.done, 0)
         for chapter in retried.chapters {
             XCTAssertEqual(chapter.failed, 3)
@@ -159,6 +159,140 @@ final class PreTranslationTaskTests: XCTestCase {
         XCTAssertFalse(PreTranslationTaskManager.shared.retryFailed(id: task.id + "-nonexistent"))
         XCTAssertNil(PreTranslationTaskManager.shared.start(comic: comic, source: source, chapters: chapters, epIndices: [99]))
         XCTAssertNil(PreTranslationTaskManager.shared.start(comic: comic, source: source, chapters: chapters, epIndices: []))
+    }
+
+    /// A page-list failure is retried as the whole resolved chapter, not as a
+    /// synthetic failure of page zero.
+    func testPageListFailureRetryProcessesEveryResolvedPage() async throws {
+        let script = """
+        var pageListAttempts = 0
+        class ResolveRetrySource extends ComicSource {
+            name = "ResolveRetry"
+            key = "resolve_retry"
+            version = "1.0.0"
+            minAppVersion = "1.0.0"
+            url = "https://resolve-retry.example.com"
+            comic = {
+                loadEp: async (id, ep) => {
+                    pageListAttempts++
+                    return pageListAttempts === 1
+                        ? { images: [] }
+                        : { images: ["not a url 1", "not a url 2", "not a url 3"] }
+                }
+            }
+            search = {
+                load: async (keyword, page, options) => ({ comics: [], maxPage: 1 })
+            }
+        }
+        """
+        var source: ComicSource!
+        try runtime.queue.sync {
+            let parser = ComicSourceParser()
+            source = try parser.parse(script, filePath: "\(dataPath!)/resolve-retry.js", runtime: runtime)
+            ComicSourceManager.shared.registerForTesting(source)
+        }
+
+        let chapters = ComicChapters(flatEntries: [.init(id: "e1", title: "Chapter 1")])
+        let comic = Comic(id: "resolve-retry-comic", title: "Resolve Retry", cover: "", subtitle: "", sourceKey: "resolve_retry")
+        let task = try XCTUnwrap(PreTranslationTaskManager.shared.start(
+            comic: comic, source: source, chapters: chapters, epIndices: [0]
+        ))
+
+        var firstRun = task
+        for _ in 0..<200 {
+            if let current = PreTranslationTaskManager.shared.allTasks().first(where: { $0.id == task.id }) {
+                firstRun = current
+                if !current.isRunning { break }
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(firstRun.status, .failed)
+        XCTAssertTrue(firstRun.chapters[0].hasPageListFailure)
+        XCTAssertEqual(firstRun.chapters[0].total, 0)
+        XCTAssertTrue(firstRun.chapters[0].failedPages.isEmpty)
+
+        XCTAssertTrue(PreTranslationTaskManager.shared.retryFailed(id: task.id))
+        var retried = firstRun
+        for _ in 0..<200 {
+            if let current = PreTranslationTaskManager.shared.allTasks().first(where: { $0.id == task.id }) {
+                retried = current
+                if !current.isRunning { break }
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(retried.status, .failed)
+        XCTAssertFalse(retried.chapters[0].hasPageListFailure)
+        XCTAssertEqual(retried.chapters[0].total, 3)
+        XCTAssertEqual(retried.chapters[0].failedPages, [0, 1, 2])
+    }
+
+    func testPersistedActiveStatusesSurviveManagerReload() throws {
+        let key = "venera.preTranslationTasks.test.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+
+        let running = PreTranslationTask(
+            cid: "running", sourceKey: "source", title: "Running", cover: "",
+            chapters: [.init(epIndex: 0, eid: "e1", title: "One", total: 10, done: 4)]
+        )
+        var paused = PreTranslationTask(
+            cid: "paused", sourceKey: "source", title: "Paused", cover: "",
+            chapters: [.init(epIndex: 0, eid: "e2", title: "Two", total: 8, done: 3)]
+        )
+        paused.status = .paused
+        let data = try JSONEncoder().encode([running, paused])
+        UserDefaults.standard.set(data, forKey: key)
+
+        let restored = PreTranslationTaskManager(persistenceKey: key).allTasks()
+        XCTAssertEqual(restored.map(\.status), [.running, .paused])
+        XCTAssertEqual(restored[0].chapters[0].done, 4)
+        XCTAssertEqual(restored[1].chapters[0].done, 3)
+    }
+
+    func testResumePendingTaskContinuesAfterCommittedPrefix() async throws {
+        let script = """
+        class ResumeSource extends ComicSource {
+            name = "Resume"
+            key = "resume_source"
+            version = "1.0.0"
+            minAppVersion = "1.0.0"
+            url = "https://resume.example.com"
+            comic = {
+                loadEp: async (id, ep) => ({ images: ["not a url 0", "not a url 1", "not a url 2"] })
+            }
+            search = {
+                load: async (keyword, page, options) => ({ comics: [], maxPage: 1 })
+            }
+        }
+        """
+        var source: ComicSource!
+        try runtime.queue.sync {
+            let parser = ComicSourceParser()
+            source = try parser.parse(script, filePath: "\(dataPath!)/resume.js", runtime: runtime)
+            ComicSourceManager.shared.registerForTesting(source)
+        }
+
+        let key = "venera.preTranslationTasks.resume.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let persisted = PreTranslationTask(
+            cid: "resume-comic", sourceKey: "resume_source", title: "Resume", cover: "",
+            chapters: [.init(epIndex: 0, eid: "e1", title: "One", total: 3, done: 1)]
+        )
+        UserDefaults.standard.set(try JSONEncoder().encode([persisted]), forKey: key)
+        let manager = PreTranslationTaskManager(persistenceKey: key)
+        manager.resumePendingTasks()
+
+        var resumed = persisted
+        for _ in 0..<200 {
+            if let current = manager.allTasks().first {
+                resumed = current
+                if !current.isRunning { break }
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(resumed.status, .completed)
+        XCTAssertEqual(resumed.chapters[0].done, 1)
+        XCTAssertEqual(resumed.chapters[0].failed, 2)
+        XCTAssertEqual(resumed.chapters[0].failedPages, [1, 2])
     }
 
     /// 启动校验：重复索引去重保序。

@@ -148,7 +148,8 @@ public final class SourceCatalogManager: @unchecked Sendable {
     }
 
     public func installSource(from item: CatalogSourceItem) async throws {
-        let response = await HTTPClient.shared.request(method: "GET", url: item.url)
+        let sourceURL = SourceURL(item.url)
+        let response = await HTTPClient.shared.request(method: "GET", url: sourceURL.url, headers: sourceURL.headers(["cache-time": "no"]))
         guard let status = response.status, (200..<300).contains(status),
               let script = String(data: response.body, encoding: .utf8), !script.isEmpty else {
             throw JSRuntimeException(message: "Failed to download script from \(item.url)")

@@ -55,6 +55,7 @@ struct SettingsHome: View {
     /// 搜索索引：(条目文案, 匹配关键词, 所在分区)。
     private static let searchIndex: [(title: String, route: SettingsRoute)] = [
         ("Theme Mode", .app), ("Theme Color", .app), ("Language", .app),
+        ("Live Activities", .app), ("Show comic titles and covers", .app),
         ("Authorization Required", .app), ("Unlock method", .app),
         ("Reading mode", .reader), ("Page animation", .reader),
         ("Seamless chapter reading", .reader), ("Fill screen", .reader),

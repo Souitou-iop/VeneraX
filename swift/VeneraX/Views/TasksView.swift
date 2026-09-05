@@ -240,8 +240,8 @@ struct TasksView: View {
 
     private var runningComicExportTasks: [LocalComicExportTask] { comicExportTasks.filter(\.isRunning) }
     private var finishedComicExportTasks: [LocalComicExportTask] { comicExportTasks.filter { !$0.isRunning } }
-    private var runningPreTranslationTasks: [PreTranslationTask] { preTranslationTasks.filter(\.isRunning) }
-    private var finishedPreTranslationTasks: [PreTranslationTask] { preTranslationTasks.filter { !$0.isRunning } }
+    private var runningPreTranslationTasks: [PreTranslationTask] { preTranslationTasks.filter(\.isActive) }
+    private var finishedPreTranslationTasks: [PreTranslationTask] { preTranslationTasks.filter { !$0.isActive } }
 
     private var runningList: some View {
         Group {
@@ -605,7 +605,7 @@ struct TasksView: View {
                 Label("Pre-translation".tl, systemImage: "character.book.closed")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text(task.status.rawValue.capitalized)
+                Text(task.status.rawValue.capitalized.tl)
                     .font(.caption2)
                     .foregroundStyle(task.status == .failed ? .red : .secondary)
             }
@@ -614,9 +614,15 @@ struct TasksView: View {
                 Text(verbatim: task.phase).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
             HStack {
-                Text("\(task.chapters.count) · \(task.done + task.failed)/\(task.total)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if task.total == 0 {
+                    Text("\(task.chapters.count) · \("Preparing".tl)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text("\(task.chapters.count) · \(task.done + task.failed)/\(task.total)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 if task.failed > 0 {
                     Text("\("Failed".tl): \(task.failed)")
@@ -627,6 +633,19 @@ struct TasksView: View {
             ProgressView(value: task.progress)
             HStack {
                 if task.isRunning {
+                    Button("Pause".tl) {
+                        PreTranslationTaskManager.shared.pause(id: task.id)
+                    }
+                    .font(.caption)
+                    Button("Cancel".tl, role: .destructive) {
+                        PreTranslationTaskManager.shared.cancel(id: task.id)
+                    }
+                    .font(.caption)
+                } else if task.isPaused {
+                    Button("Resume".tl) {
+                        PreTranslationTaskManager.shared.resume(id: task.id)
+                    }
+                    .font(.caption)
                     Button("Cancel".tl, role: .destructive) {
                         PreTranslationTaskManager.shared.cancel(id: task.id)
                     }

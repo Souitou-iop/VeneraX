@@ -4,6 +4,7 @@ public enum AppLinkRoute: Equatable, Sendable {
     case comic(sourceKey: String, id: String)
     case installSource(url: String)
     case syncConfig(url: String, user: String, pass: String)
+    case tasks
 }
 
 /// 深度链接与 URL 路由解析器（对齐 app_links.dart，支持 venera:// 与源域名自动匹配）。
@@ -17,7 +18,9 @@ public enum AppLinksHandler {
             let host = url.host?.lowercased() ?? ""
             let path = url.path.lowercased()
 
-            if host == "source" || path.contains("source") {
+            if host == "tasks" || path.contains("tasks") {
+                return .tasks
+            } else if host == "source" || path.contains("source") {
                 if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                    let queryItems = components.queryItems {
                     if let scriptUrl = queryItems.first(where: { $0.name == "url" })?.value {

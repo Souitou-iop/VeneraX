@@ -13,6 +13,24 @@ public final class DownloadManager: @unchecked Sendable {
         AppPaths.join(AppPaths.dataPath, "downloading_tasks.json")
     }
 
+    public enum QueueResult: Sendable, Equatable { case completed, cancelled, partiallyCancelled }
+    private var queueID = UUID().uuidString
+    private var completedCount = 0
+    private var cancelledCount = 0
+
+    /// Capture membership and terminal outcome under the same lock. Never infer
+    /// completion from a throttled progress observer.
+    public func activitySnapshot() -> (id: String, tasks: [DownloadTask], result: QueueResult?) {
+        lock.lock()
+        defer { lock.unlock() }
+        let result: QueueResult? = if !downloadingTasks.isEmpty || completedCount + cancelledCount == 0 {
+            nil
+        } else if cancelledCount == 0 { .completed }
+        else if completedCount == 0 { .cancelled }
+        else { .partiallyCancelled }
+        return (queueID, downloadingTasks, result)
+    }
+
     private var saveTask: Task<Void, Never>?
 
     public init() {
@@ -31,9 +49,16 @@ public final class DownloadManager: @unchecked Sendable {
 
     public func addTask(_ task: DownloadTask) {
         lock.lock()
-        if !downloadingTasks.contains(where: { $0.id == task.id && $0.comicType == task.comicType }) {
-            downloadingTasks.append(task)
+        guard !downloadingTasks.contains(where: { $0.id == task.id && $0.comicType == task.comicType }) else {
+            lock.unlock()
+            return
         }
+        if downloadingTasks.isEmpty {
+            queueID = UUID().uuidString
+            completedCount = 0
+            cancelledCount = 0
+        }
+        downloadingTasks.append(task)
         lock.unlock()
         task.resume()
         onChange.emit(())
@@ -43,7 +68,9 @@ public final class DownloadManager: @unchecked Sendable {
 
     public func removeTask(_ task: DownloadTask) {
         lock.lock()
-        downloadingTasks.removeAll { $0.id == task.id && $0.comicType == task.comicType }
+        let previousCount = downloadingTasks.count
+        downloadingTasks.removeAll { $0 === task }
+        cancelledCount += previousCount - downloadingTasks.count
         lock.unlock()
         onChange.emit(())
         saveCurrentDownloadingTasks()
@@ -95,6 +122,7 @@ public final class DownloadManager: @unchecked Sendable {
     public func cancelAll() {
         lock.lock()
         let tasks = downloadingTasks
+        cancelledCount += tasks.count
         downloadingTasks.removeAll()
         lock.unlock()
         for task in tasks {
@@ -132,13 +160,17 @@ public final class DownloadManager: @unchecked Sendable {
     }
 
     public func completeTask(_ task: DownloadTask) {
-        let localComic = task.toLocalComic()
-        LocalManager.shared.add(localComic)
-
         lock.lock()
-        downloadingTasks.removeAll { $0.id == task.id && $0.comicType == task.comicType }
+        // A late completion after cancellation must not resurrect a local comic.
+        guard downloadingTasks.contains(where: { $0 === task }) else {
+            lock.unlock()
+            return
+        }
+        downloadingTasks.removeAll { $0 === task }
+        completedCount += 1
         lock.unlock()
 
+        LocalManager.shared.add(task.toLocalComic())
         onChange.emit(())
         saveCurrentDownloadingTasks()
         advanceQueue()

@@ -126,7 +126,7 @@ struct ComicDetailsView: View {
                     }
 
                     // 预翻译入口：需要源可用且开启图片翻译（对齐原版 pre-translation）。
-                    if let source, let details, let chapters = details.chapters, !chapters.isEmpty,
+                    if source != nil, let details, let chapters = details.chapters, !chapters.isEmpty,
                        AppData.shared.settings["enableImageTranslation"].boolValue ?? false {
                         Button {
                             preTranslationComic = comic
@@ -135,7 +135,7 @@ struct ComicDetailsView: View {
                         } label: {
                             Label("Pre-translate chapters".tl, systemImage: "character.book.closed")
                         }
-                        .disabled(PreTranslationTaskManager.shared.allTasks().contains(where: \.isRunning))
+                        .disabled(PreTranslationTaskManager.shared.allTasks().contains(where: \.isActive))
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -645,7 +645,7 @@ struct PreTranslationPickerSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedIndices: Set<Int> = []
-    @State private var runningTaskExists = PreTranslationTaskManager.shared.allTasks().contains(where: \.isRunning)
+    @State private var runningTaskExists = PreTranslationTaskManager.shared.allTasks().contains(where: \.isActive)
 
     private var source: ComicSource? {
         ComicSourceManager.shared.find(comic.sourceKey)

@@ -4,6 +4,7 @@ import VeneraKit
 /// 主框架：支持 iPhone 底部 TabView 与 iPad / Mac 宽屏 NavigationSplitView 侧边栏自适应（对齐原版多端响应式）。
 struct MainTabView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(AppState.self) private var appState
     @State private var tabSelection = 0
     @State private var sidebarSelection: SidebarItem? = .home
 
@@ -65,10 +66,15 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        if horizontalSizeClass == .regular {
-            padSidebarLayout
-        } else {
-            phoneTabLayout
+        Group {
+            if horizontalSizeClass == .regular {
+                padSidebarLayout
+            } else {
+                phoneTabLayout
+            }
+        }
+        .sheet(isPresented: Bindable(appState).showsTaskCenter) {
+            NavigationStack { TasksView() }
         }
     }
 

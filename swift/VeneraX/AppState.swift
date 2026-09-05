@@ -21,6 +21,8 @@ final class AppState {
     var autoOpenReader: ReaderAutoLaunch?
     /// 等待启动完成后处理的外部 URL。之前 URL 路由只解析不导航，导致漫画深链静默丢失。
     var pendingExternalURL: URL?
+    /// Live Activity deep links present the task center above the current tab.
+    var showsTaskCenter = false
     /// 首启迁移：免责声明同意过或已有数据时视为老用户。
     var needsMigration = false
     /// Latest release discovered during this launch, if any.

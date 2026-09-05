@@ -80,8 +80,12 @@ final class AppServices {
             }
         }
         isBooted = true
+        LiveActivityCoordinator.shared.start()
         Log.info("Startup", "Runtime services ready in \(Int(Date().timeIntervalSince(startedAt) * 1000)) ms")
 
+        // Sources are now available, so interrupted pre-translation jobs can
+        // safely rebuild their page lists and continue from persisted prefixes.
+        PreTranslationTaskManager.shared.resumePendingTasks()
         runStartupMaintenance()
 
         if SelfTest.shouldRun() {

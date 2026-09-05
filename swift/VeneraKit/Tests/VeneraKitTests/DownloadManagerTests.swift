@@ -112,4 +112,57 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertNotNil(LocalManager.shared.find(id: "c1", type: ComicID.forSource("komiic")))
         XCTAssertEqual(manager.downloadingTasks.count, 2)
     }
+    func testQueueOutcomeDoesNotDependOnProgress() {
+        let manager = DownloadManager()
+        let task = ActivityTestDownload(id: "fast-success", comicType: 0)
+        manager.addTask(task)
+        task.progress = 0.05 // Simulates the last snapshot before a fast completion.
+        manager.completeTask(task)
+        XCTAssertEqual(manager.activitySnapshot().result, .completed)
+        XCTAssertTrue(manager.activitySnapshot().tasks.isEmpty)
+        manager.completeTask(task) // duplicate completion is harmless
+        XCTAssertEqual(manager.activitySnapshot().result, .completed)
+    }
+
+    func testCancellationAtOneHundredPercentRemainsCancelled() {
+        let manager = DownloadManager()
+        let task = ActivityTestDownload(id: "cancel-at-100", comicType: 0)
+        manager.addTask(task)
+        task.progress = 1
+        manager.cancelAll()
+        XCTAssertEqual(manager.activitySnapshot().result, .cancelled)
+        manager.completeTask(task) // late network completion must not resurrect it
+        XCTAssertEqual(manager.activitySnapshot().result, .cancelled)
+        XCTAssertNil(LocalManager.shared.find(id: task.id, type: 0))
+    }
+
+    func testMixedQueueOutcomeAndNewQueueReset() {
+        let manager = DownloadManager()
+        let first = ActivityTestDownload(id: "mixed-complete", comicType: 0)
+        let second = ActivityTestDownload(id: "mixed-cancel", comicType: 0)
+        manager.addTask(first)
+        manager.addTask(second)
+        let oldID = manager.activitySnapshot().id
+        manager.removeTask(second)
+        XCTAssertNil(manager.activitySnapshot().result)
+        manager.completeTask(first)
+        XCTAssertEqual(manager.activitySnapshot().result, .partiallyCancelled)
+        manager.cancelAll() // cancelling an already empty queue does not change history
+        XCTAssertEqual(manager.activitySnapshot().result, .partiallyCancelled)
+        let next = ActivityTestDownload(id: "new-queue", comicType: 0)
+        manager.addTask(next)
+        XCTAssertNotEqual(manager.activitySnapshot().id, oldID)
+        XCTAssertNil(manager.activitySnapshot().result)
+        manager.completeTask(next)
+        XCTAssertEqual(manager.activitySnapshot().result, .completed)
+    }
+
+}
+
+private final class ActivityTestDownload: DownloadTask, @unchecked Sendable {
+    override func toLocalComic() -> LocalComic {
+        LocalComic(id: id, title: id, subtitle: "", tags: [], directory: id,
+                   chapters: nil, cover: "", comicType: comicType, downloadedChapters: [])
+    }
+    override func toJson() -> JSON { .object([:]) }
 }

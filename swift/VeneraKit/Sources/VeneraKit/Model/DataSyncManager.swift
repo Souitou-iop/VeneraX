@@ -182,11 +182,22 @@ public final class DataSyncManager: @unchecked Sendable {
         start(operation: .download, backupName: backupName, fileURL: nil, forceUpload: false)
     }
 
-    /// 启动一次本地 `.venera` 导入。文件安全作用域在后台任务内打开，
-    /// 避免设置页提前停止作用域后才开始读取导致 Files provider 失败。
+    /// 启动一次本地 `.venera` 导入。
+    ///
+    /// `fileImporter` 返回的 URL 可能属于外部 File Provider。按照 Apple
+    /// 的文档，必须在回调仍持有 URL 时取得安全作用域；这里立即复制到
+    /// App 临时目录，再把稳定的沙盒副本交给后台任务。
     @discardableResult
     public func startImport(fileURL: URL) -> DataSyncTask? {
-        start(operation: .import, backupName: nil, fileURL: fileURL, forceUpload: false)
+        let secured = fileURL.startAccessingSecurityScopedResource()
+        defer { if secured { fileURL.stopAccessingSecurityScopedResource() } }
+        guard let stagedURL = try? stageImportedBackup(from: fileURL) else { return nil }
+        guard let task = start(operation: .import, backupName: nil, fileURL: stagedURL, forceUpload: false) else {
+            try? FileManager.default.removeItem(at: stagedURL)
+            try? FileManager.default.removeItem(at: stagedURL.deletingLastPathComponent())
+            return nil
+        }
+        return task
     }
 
     /// 启动一次本地整库导出。任务历史只保存摘要，完成后的临时文件通过
@@ -283,6 +294,16 @@ public final class DataSyncManager: @unchecked Sendable {
         return task
     }
 
+    private func stageImportedBackup(from sourceURL: URL) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VeneraX-Imports", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(sourceURL.lastPathComponent)
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return destination
+    }
+
     private func update(id: String, progress: Double, phase: String) {
         lock.lock()
         guard let index = tasks.firstIndex(where: { $0.id == id && $0.status == .running }) else {
@@ -343,8 +364,13 @@ public final class DataSyncManager: @unchecked Sendable {
             case .import:
                 guard let fileURL else { throw SyncError.invalidArchive }
                 update(id: taskID, progress: 0.15, phase: "Reading backup")
-                let secured = fileURL.startAccessingSecurityScopedResource()
-                defer { if secured { fileURL.stopAccessingSecurityScopedResource() } }
+                // startImport stages the provider URL before this task is made.
+                // The task only reads the stable sandbox copy and removes it
+                // when the operation reaches a terminal state.
+                defer {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+                }
                 let data = try await Task.detached(priority: .utility) {
                     try Data(contentsOf: fileURL, options: .mappedIfSafe)
                 }.value

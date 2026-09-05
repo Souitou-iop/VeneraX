@@ -663,6 +663,13 @@ public final class DataSync: @unchecked Sendable {
                     }
                 }
             }
+            // Restoring history.db replaces the file after managers may have
+            // initialized. Re-run the legacy image-favorite bridge now so a
+            // Flutter image_favorites table is visible to Swift immediately.
+            if dbFiles.keys.contains(where: { $0.hasSuffix("history.db") }) {
+                ImageFavoriteManager.shared.ensureSchema()
+                ImageFavoriteManager.shared.onChange.emit(())
+            }
             if dbFiles.keys.contains(where: { $0.hasSuffix("local.db") }) {
                 LocalManager.shared.ensureSchema()
                 LocalManager.shared.ensureDirectory()

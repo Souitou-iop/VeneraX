@@ -4,10 +4,64 @@ import VeneraKit
 
 /// 「Data & Sync」分区（对齐 settings/data_sync.dart + app.dart 中的
 /// _WebdavSetting/_WebdavSyncOptions：数据组 + WebDAV 组）。
+private struct BackupImportSourceSheet: View {
+    let onImport: (URL) -> Void
+    let onBrowseFiles: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var localBackups: [URL] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Select a Venera backup to import.".tl)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Section("On This iPhone".tl) {
+                    ForEach(localBackups, id: \.path) { url in
+                        Button {
+                            onImport(url)
+                        } label: {
+                            Label(url.lastPathComponent, systemImage: "doc.zipper")
+                        }
+                    }
+                    if localBackups.isEmpty {
+                        Text("No local .venera backups found".tl)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    Button("Browse Files".tl, action: onBrowseFiles)
+                } footer: {
+                    Text("Choose a backup from Downloads, iCloud Drive, or another file provider.".tl)
+                        .font(.caption)
+                }
+            }
+            .navigationTitle("Import App Data".tl)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel".tl) { dismiss() }
+                }
+            }
+            .task {
+                let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                localBackups = (try? FileManager.default.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                ).filter { $0.pathExtension.lowercased() == "venera" }
+                    .sorted { $0.lastPathComponent < $1.lastPathComponent }) ?? []
+            }
+        }
+    }
+}
+
 struct DataSyncSettingsSection: View {
     @State private var cacheSize: Int = CacheManager.shared.size
     @State private var cacheLimitMB: Int = AppData.shared.settings["cacheSize"].intValue ?? 2048
     @State private var showImporter = false
+    @State private var showSystemImporter = false
     @State private var showWebdavConfig = false
     @State private var showSyncScanner = false
     @State private var showSyncPIN = false
@@ -41,13 +95,32 @@ struct DataSyncSettingsSection: View {
         } message: {
             Text("Delete all cached images? Downloaded local comics are not affected.".tl)
         }
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.data],
-            allowsMultipleSelection: false
-        ) { result in
-            importBackup(result)
+        // The backup has a custom extension but some File Providers expose
+        // it as an unknown item. Accept one item here, then validate `.venera`.
+        // The local app Documents case is handled by BackupImportSourceSheet;
+        // external providers use the normal one-tap import flow.
+        .sheet(isPresented: $showImporter) {
+            BackupImportSourceSheet(
+                onImport: { url in
+                    showImporter = false
+                    importBackup(url: url)
+                },
+                onBrowseFiles: {
+                    showImporter = false
+                    showSystemImporter = true
+                }
+            )
         }
+        .fileImporter(
+            isPresented: $showSystemImporter,
+            allowedContentTypes: [.item],
+            onCompletion: { result in
+                importBackup(result)
+            }
+        )
+        .fileDialogBrowserOptions(.displayFileExtensions)
+        .fileDialogMessage("Select one .venera backup file to import.".tl)
+        .fileDialogConfirmationLabel("Import".tl)
         .sheet(isPresented: $showWebdavConfig) {
             WebdavConfigSheet(initialConfig: importedSyncPayload)
                 .onDisappear { importedSyncPayload = nil }
@@ -308,8 +381,20 @@ struct DataSyncSettingsSection: View {
             .present(activityVC, animated: true)
     }
 
-    private func importBackup(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result, let url = urls.first else { return }
+    private func importBackup(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            importBackup(url: url)
+        case .failure(let error):
+            errorMessage = "Import failed: @error".tl.replacingOccurrences(of: "@error", with: error.localizedDescription)
+        }
+    }
+
+    private func importBackup(url: URL) {
+        guard url.pathExtension.lowercased() == "venera" else {
+            errorMessage = "Please select a .venera backup file".tl
+            return
+        }
         guard DataSyncManager.shared.startImport(fileURL: url) != nil else {
             errorMessage = "Another data sync task is already running".tl
             return

@@ -10,25 +10,70 @@
 		AA0000012AAAAAAAAA00000001 /* VeneraKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000022AAAAAAAAA00000001 /* VeneraKit */; };
 		AA0000142AAAAAAAAA00000001 /* guide.zh.md in Resources */ = {isa = PBXBuildFile; fileRef = AA0000152AAAAAAAAA00000001 /* guide.zh.md */; };
 		AA0000162AAAAAAAAA00000001 /* guide.en.md in Resources */ = {isa = PBXBuildFile; fileRef = AA0000172AAAAAAAAA00000001 /* guide.en.md */; };
+		LA0000012AAAAAAAAA00000001 /* VeneraTaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = LA0000022AAAAAAAAA00000001 /* VeneraTaskActivityAttributes.swift */; };
+		LA0000032AAAAAAAAA00000001 /* VeneraXLiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = LA0000042AAAAAAAAA00000001 /* VeneraXLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		LA0000052AAAAAAAAA00000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000D2AAAAAAAAA00000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = LA0000062AAAAAAAAA00000001;
+			remoteInfo = VeneraXLiveActivity;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		LA0000072AAAAAAAAA00000001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				LA0000032AAAAAAAAA00000001 /* VeneraXLiveActivity.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		AA0000032AAAAAAAAA00000001 /* VeneraX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VeneraX.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000152AAAAAAAAA00000001 /* guide.zh.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../doc/guide.zh.md; sourceTree = "<group>"; };
 		AA0000172AAAAAAAAA00000001 /* guide.en.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../doc/guide.en.md; sourceTree = "<group>"; };
+		LA0000022AAAAAAAAA00000001 /* VeneraTaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VeneraX/LiveActivities/VeneraTaskActivityAttributes.swift; sourceTree = SOURCE_ROOT; };
+		LA0000042AAAAAAAAA00000001 /* VeneraXLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VeneraXLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		LA0000082AAAAAAAAA00000001 /* Exceptions for "VeneraXLiveActivity" folder */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+                VeneraXLiveActivity.entitlements,
+			);
+			target = LA0000062AAAAAAAAA00000001 /* VeneraXLiveActivity */;
+		};
 		AA0000042AAAAAAAAA00000001 /* Exceptions for "VeneraX" folder in "VeneraX" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+                VeneraX.entitlements,
 			);
 			target = AA0000082AAAAAAAAA00000001 /* VeneraX */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		LA0000092AAAAAAAAA00000001 /* VeneraXLiveActivity */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				LA0000082AAAAAAAAA00000001 /* Exceptions for "VeneraXLiveActivity" folder */,
+			);
+			path = VeneraXLiveActivity;
+			sourceTree = "<group>";
+		};
 		AA0000052AAAAAAAAA00000001 /* VeneraX */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -40,6 +85,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		LA00000A2AAAAAAAAA00000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA0000062AAAAAAAAA00000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -55,6 +107,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000052AAAAAAAAA00000001 /* VeneraX */,
+				LA0000092AAAAAAAAA00000001 /* VeneraXLiveActivity */,
 				AA0000152AAAAAAAAA00000001 /* guide.zh.md */,
 				AA0000172AAAAAAAAA00000001 /* guide.en.md */,
 				AA0000092AAAAAAAAA00000001 /* Products */,
@@ -65,6 +118,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000032AAAAAAAAA00000001 /* VeneraX.app */,
+				LA0000042AAAAAAAAA00000001 /* VeneraXLiveActivity.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -79,10 +133,12 @@
 				AA00000B2AAAAAAAAA00000001 /* Sources */,
 				AA0000062AAAAAAAAA00000001 /* Frameworks */,
 				AA00000C2AAAAAAAAA00000001 /* Resources */,
+				LA0000072AAAAAAAAA00000001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				LA00000B2AAAAAAAAA00000001 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA0000052AAAAAAAAA00000001 /* VeneraX */,
@@ -94,6 +150,28 @@
 			productName = VeneraX;
 			productReference = AA0000032AAAAAAAAA00000001 /* VeneraX.app */;
 			productType = "com.apple.product-type.application";
+		};
+		LA0000062AAAAAAAAA00000001 /* VeneraXLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = LA00000C2AAAAAAAAA00000001 /* Build configuration list for PBXNativeTarget "VeneraXLiveActivity" */;
+			buildPhases = (
+				LA00000D2AAAAAAAAA00000001 /* Sources */,
+				LA00000A2AAAAAAAAA00000001 /* Frameworks */,
+				LA00000E2AAAAAAAAA00000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				LA0000092AAAAAAAAA00000001 /* VeneraXLiveActivity */,
+			);
+			name = VeneraXLiveActivity;
+			packageProductDependencies = (
+			);
+			productName = VeneraXLiveActivity;
+			productReference = LA0000042AAAAAAAAA00000001 /* VeneraXLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -107,6 +185,9 @@
 				TargetAttributes = {
 					AA0000082AAAAAAAAA00000001 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					LA0000062AAAAAAAAA00000001 = {
+						CreatedOnToolsVersion = 26.0;
 					};
 				};
 			};
@@ -130,6 +211,7 @@
 			projectRoot = "";
 			targets = (
 				AA0000082AAAAAAAAA00000001 /* VeneraX */,
+				LA0000062AAAAAAAAA00000001 /* VeneraXLiveActivity */,
 			);
 		};
 /* End PBXProject section */
@@ -144,9 +226,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		LA00000E2AAAAAAAAA00000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		LA00000D2AAAAAAAAA00000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				LA0000012AAAAAAAAA00000001 /* VeneraTaskActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA00000B2AAAAAAAAA00000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -155,6 +252,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		LA00000B2AAAAAAAAA00000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = LA0000062AAAAAAAAA00000001 /* VeneraXLiveActivity */;
+			targetProxy = LA0000052AAAAAAAAA00000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA00000F2AAAAAAAAA00000001 /* Debug */ = {
@@ -239,6 +344,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VeneraX/Info.plist;
+                CODE_SIGN_ENTITLEMENTS = VeneraX/VeneraX.entitlements;
 				INFOPLIST_KEY_CFBundleDisplayName = VeneraX;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -276,6 +382,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VeneraX/Info.plist;
+                CODE_SIGN_ENTITLEMENTS = VeneraX/VeneraX.entitlements;
 				INFOPLIST_KEY_CFBundleDisplayName = VeneraX;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -303,6 +410,60 @@
 			};
 			name = Release;
 		};
+		LA00000F2AAAAAAAAA00000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VeneraXLiveActivity/Info.plist;
+                CODE_SIGN_ENTITLEMENTS = VeneraXLiveActivity/VeneraXLiveActivity.entitlements;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 3.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.kyosee.venerax.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		LA0000102AAAAAAAAA00000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VeneraXLiveActivity/Info.plist;
+                CODE_SIGN_ENTITLEMENTS = VeneraXLiveActivity/VeneraXLiveActivity.entitlements;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 3.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.kyosee.venerax.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -320,6 +481,15 @@
 			buildConfigurations = (
 				AA0000112AAAAAAAAA00000001 /* Debug */,
 				AA0000122AAAAAAAAA00000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		LA00000C2AAAAAAAAA00000001 /* Build configuration list for PBXNativeTarget "VeneraXLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				LA00000F2AAAAAAAAA00000001 /* Debug */,
+				LA0000102AAAAAAAAA00000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -69,6 +69,37 @@ public final class ImageFavoriteManager: @unchecked Sendable {
             PRIMARY KEY (comic_id, source_key, ep_index, page_index)
         );
         """)
+
+        // Flutter stores grouped image favorites in image_favorites. Migrate the
+        // legacy rows once after a backup restore so the Swift reader can show
+        // them without changing the original database contract.
+        guard let legacyRows = try? db.select("SELECT id, title, sub_title, source_key, image_favorites_ep, time FROM image_favorites;") else { return }
+        for row in legacyRows {
+            guard let comicID = row["id"]?.textValue,
+                  let sourceKey = row["source_key"]?.textValue,
+                  let raw = row["image_favorites_ep"]?.textValue,
+                  let episodes = JSON.decode(raw)?.arrayValue else { continue }
+            let title = row["title"]?.textValue ?? ""
+            let subtitle = row["sub_title"]?.textValue ?? ""
+            let createdAt = row["time"]?.int64Value ?? Int64(Date().timeIntervalSince1970 * 1000)
+            for episode in episodes {
+                let epIndex = max(0, (episode["ep"].intValue ?? 1) - 1)
+                let epTitle = episode["epName"].stringValue ?? ""
+                guard let images = episode["imageFavorites"].arrayValue else { continue }
+                for image in images {
+                    guard let page = image["page"].intValue, page > 0,
+                          let imageKey = image["imageKey"].stringValue else { continue }
+                    let pageIndex = page - 1
+                    let exists = (try? db.selectFirst("SELECT 1 FROM single_image_favorites WHERE comic_id = ? AND source_key = ? AND ep_index = ? AND page_index = ? LIMIT 1;", [.text(comicID), .text(sourceKey), .int(epIndex), .int(pageIndex)]))?.isEmpty == false
+                    if exists { continue }
+                    try? db.execute("""
+                    INSERT INTO single_image_favorites
+                    (comic_id, source_key, title, subtitle, ep_index, ep_title, page_index, image_key, local_file, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?);
+                    """, [.text(comicID), .text(sourceKey), .text(title), .text(subtitle), .int(epIndex), .text(epTitle), .int(pageIndex), .text(imageKey), .int(Int(createdAt))])
+                }
+            }
+        }
     }
 
     public func isFavorited(comicId: String, sourceKey: String, epIndex: Int, pageIndex: Int) -> Bool {

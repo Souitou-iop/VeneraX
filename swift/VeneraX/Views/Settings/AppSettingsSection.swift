@@ -68,6 +68,8 @@ struct AppSettingsSection: View {
                 }
             }
 
+            LiveActivitySettingsSection()
+
             Section("User".tl) {
                 SettingPickerRow(
                     title: "Language".tl,

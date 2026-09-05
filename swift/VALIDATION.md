@@ -123,3 +123,56 @@
 - 尚未用生产 VPS 执行真实写入测试，以免影响多个项目。
 - 尚未完成 Flutter 实际读取 Swift 新上传漫画目录、Swift 实际读取 Flutter 新上传漫画目录的隔离端到端验证。
 - 未完成真实大文件上传、中断续传和断点恢复测试。
+
+## 2026-09-05：应用数据导入、最新构建安装与真实备份验收
+
+### 构建与安装
+
+- 分支：`Swift-native`
+- 目标设备：iPhone 17 Simulator
+- UDID：`233EA1C2-1DB4-4D5B-9ED1-E2C30F951A7E`
+- Runtime：iOS 26.5
+- DerivedData：`/Volumes/SanDisk/Developer/Xcode/DerivedData/VeneraX-reader-20260905`
+- App：`io.github.kyosee.venerax`
+- App 版本：`3.0.0 (1)`
+- 结果：`xcodebuild ... build` → `BUILD SUCCEEDED`
+- 安装：`xcrun simctl install` 成功
+- 启动：`xcrun simctl launch` 成功，模拟器保持 Booted
+
+### VeneraKit 测试
+
+```text
+144 tests, 0 failures, 1 skipped
+```
+
+命令：
+
+```bash
+swift test --package-path swift/VeneraKit --disable-sandbox
+```
+
+### 真实 `.venera` 导入验收
+
+测试文件：`1788594154.venera`
+
+- SHA-256：`8498fe108845c5466902e881f9b3fe630c860acbb1b3583506ab4bb9026c0f79`
+- 文件大小：`1,791,613` bytes
+- UI 路径：`设置 → 数据与同步 → 导入应用数据 → On This iPhone → 1788594154.venera`
+- 导入任务：`operation=import`
+- 导入状态：`completed`
+- 进度：`1.0`
+- 失败数：`0`
+
+通过 `xcrun simctl get_app_container` 动态取得当前 App 数据容器后，读取数据库核对：
+
+```text
+history.db.history                 = 631
+history.db.reading_statistics      = 101
+history.db.single_image_favorites  = 10
+data/venera.db.comics               = 2814
+data/venera.db.works                = 182
+data/venera.db.chapters             = 4957
+data/venera.db.history_events      = 16813
+```
+
+结论：最新构建已安装到指定模拟器；真实备份已通过应用内导入入口完成导入，任务状态和数据库内容均已核实。模拟器按当前测试规范保持运行，后续由操作者决定关闭时机。

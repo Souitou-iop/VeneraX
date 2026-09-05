@@ -8,7 +8,17 @@ struct VeneraXApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            Group {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--live-activity-preview") {
+                    LiveActivityPreviewHost()
+                } else {
+                    RootView()
+                }
+                #else
+                RootView()
+                #endif
+            }
                 .environment(appState)
                 .tint(ThemeStore.shared.accent)
                 .preferredColorScheme(ThemeStore.shared.preferredColorScheme)
@@ -18,6 +28,12 @@ struct VeneraXApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                LiveActivityCoordinator.shared.becameActive()
+            }
+            if phase == .background {
+                PreTranslationTaskManager.shared.checkpoint()
+            }
             if phase == .background || phase == .active {
                 Task.detached {
                     DataSync.shared.settlePendingChanges()
@@ -77,11 +93,23 @@ struct RootView: View {
     private func handleExternalURL() async {
         guard let url = appState.pendingExternalURL else { return }
         appState.pendingExternalURL = nil
+        // Files may deliver a .venera document through the app URL handler
+        // instead of returning it from the picker. Handle that path explicitly.
+        if url.isFileURL, url.pathExtension.lowercased() == "venera" {
+            guard DataSyncManager.shared.startImport(fileURL: url) != nil else {
+                AppServices.shared.showMessage("Another data sync task is already running".tl)
+                return
+            }
+            AppServices.shared.showMessage("Import task started; monitor it in Task Center".tl)
+            return
+        }
         guard let route = await AppLinksHandler.parse(url: url) else {
             AppServices.shared.showMessage("Unsupported link".tl)
             return
         }
         switch route {
+        case .tasks:
+            appState.showsTaskCenter = true
         case .comic(let sourceKey, let id):
             guard let source = ComicSourceManager.shared.find(sourceKey) else {
                 AppServices.shared.showMessage("Comic source not found".tl)

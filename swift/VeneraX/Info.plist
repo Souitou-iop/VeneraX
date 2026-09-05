@@ -35,6 +35,8 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.books</string>
 	<key>UIApplicationSceneManifest</key>
@@ -67,6 +69,28 @@
 	<string>Scan a QR code to import sync configuration.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Ensure that the operation is being performed by the user themselves.</string>
+	<key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.kyosee.venerax.backup</string>
+            <key>UTTypeDescription</key>
+            <string>Venera Backup</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string><string>public.content</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict><key>public.filename-extension</key><array><string>venera</string></array></dict>
+        </dict>
+    </array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>Venera Backup</string>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>LSHandlerRank</key><string>Alternate</string>
+			<key>LSItemContentTypes</key><array><string>io.github.kyosee.venerax.backup</string></array>
+		</dict>
+	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

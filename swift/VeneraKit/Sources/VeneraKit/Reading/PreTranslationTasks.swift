@@ -1,28 +1,44 @@
 import Foundation
 
-/// 后台预翻译任务（对齐原版 pre_translation_tasks.dart 的任务中心语义，
-/// 适配 Swift 的按页翻译管线）。
+/// A selected chapter in a background pre-translation task.
 ///
-/// 预翻译复用 `ImageTranslationService.translate` 并以阅读器完全相同的
-/// cacheKey 调用——预译完成的页面在阅读器中即时呈现，无等待。图片获取
-/// 走 `ImageDownloader`（与阅读器同一缓存与去重路径）。
+/// `done + failed` is always a contiguous processed prefix. This invariant is
+/// the restart checkpoint: work resumes at the first page after that prefix.
 public struct PreTranslationTask: Identifiable, Codable, Sendable, Equatable {
-    public enum Status: String, Codable, Sendable { case running, completed, cancelled, failed }
+    public enum Status: String, Codable, Sendable {
+        case running, paused, completed, cancelled, failed
+    }
 
     public struct Chapter: Codable, Sendable, Equatable {
-        /// 章节在 ComicChapters 中的平铺 0 基索引。
+        /// Chapter index in the flattened `ComicChapters` collection.
         public let epIndex: Int
-        /// 源章节 ID（loadComicPages 的 eid 参数）。
+        /// Source chapter id passed to `loadComicPages`.
         public let eid: String
         public let title: String
-        /// 页数，章节开始时才解析（解析前为 0）。
+        /// Resolved page count. Zero means that the page list is unresolved.
         public var total: Int
+        /// Successfully processed pages in the committed prefix.
         public var done: Int
+        /// Failed pages in the committed prefix.
         public var failed: Int
-        /// 本轮失败的页索引（可重试精确重跑；成功后移除）。
+        /// Page indices that failed after the page list was successfully resolved.
         public var failedPages: [Int]
+        /// Distinguishes a chapter-list failure from a failure of page zero.
+        /// Optional for backward-compatible decoding of v1 persisted tasks.
+        public var pageListFailed: Bool?
 
-        public init(epIndex: Int, eid: String, title: String, total: Int = 0, done: Int = 0, failed: Int = 0, failedPages: [Int] = []) {
+        public var hasPageListFailure: Bool { pageListFailed == true }
+
+        public init(
+            epIndex: Int,
+            eid: String,
+            title: String,
+            total: Int = 0,
+            done: Int = 0,
+            failed: Int = 0,
+            failedPages: [Int] = [],
+            pageListFailed: Bool? = nil
+        ) {
             self.epIndex = epIndex
             self.eid = eid
             self.title = title
@@ -30,6 +46,7 @@ public struct PreTranslationTask: Identifiable, Codable, Sendable, Equatable {
             self.done = done
             self.failed = failed
             self.failedPages = failedPages
+            self.pageListFailed = pageListFailed
         }
     }
 
@@ -42,22 +59,25 @@ public struct PreTranslationTask: Identifiable, Codable, Sendable, Equatable {
     public let createdAt: Date
     public var finishedAt: Date?
     public var status: Status
-    /// 当前正在处理的章节标题（运行态展示；非持久语义，重载后为空）。
+    /// Current chapter/batch description. It is display-only and safe to discard.
     public var phase: String
     public var error: String?
 
     public var isRunning: Bool { status == .running }
+    public var isPaused: Bool { status == .paused }
+    public var isActive: Bool { isRunning || isPaused }
 
-    /// 是否有可重试的失败页。
-    public var hasFailures: Bool { chapters.contains { !$0.failedPages.isEmpty } }
+    public var hasFailures: Bool {
+        chapters.contains { $0.hasPageListFailure || !$0.failedPages.isEmpty }
+    }
 
     public var total: Int { chapters.reduce(0) { $0 + $1.total } }
     public var done: Int { chapters.reduce(0) { $0 + $1.done } }
-    public var failed: Int { chapters.reduce(0) { $0 + $1.failed } }
+    public var failed: Int {
+        chapters.reduce(0) { $0 + $1.failed + ($1.hasPageListFailure ? 1 : 0) }
+    }
 
-    /// 章节加权进度（对齐原版选择）：每章等权 1/N，未开始的章（total==0）
-    /// 计 0%。保持百分比代表全部所选章节且单调，而不是只统计已开始章节
-    /// 的页数比例（那会随新章解析 total 而跳动）。
+    /// Chapter-weighted progress. An unresolved chapter contributes zero.
     public var progress: Double {
         guard !chapters.isEmpty else { return 0 }
         var sum = 0.0
@@ -90,39 +110,55 @@ public struct PreTranslationTask: Identifiable, Codable, Sendable, Equatable {
     }
 }
 
-/// 管理后台预翻译任务。结构对齐其他任务管理器（运行/历史/持久化），
-/// 任务中心以同样方式渲染。一次只允许一个运行中任务（与导出管理器一致）。
+/// Durable pre-translation queue.
+///
+/// Active tasks persist a contiguous per-chapter checkpoint. Tasks interrupted
+/// by process termination remain `running` and are resumed after comic sources
+/// finish loading. Paused tasks remain paused across launches.
 public final class PreTranslationTaskManager: @unchecked Sendable {
     public static let shared = PreTranslationTaskManager()
     public nonisolated(unsafe) static var overridePersistenceKey: String?
     public let onChange = CallbackRegistry<Void>()
 
+    private enum RunMode { case forward, failedOnly }
+
+    private struct PageOutcome: Sendable {
+        let index: Int
+        let succeeded: Bool
+    }
+
     private let lock = NSLock()
-    /// init 时快照一次（测试可在首次访问 shared 前注入 override）。
     private let persistenceKey: String
     private let historyLimit = 50
     private var tasks: [PreTranslationTask]
     private var jobs: [String: Task<Void, Never>] = [:]
+    private var lastProgressPersist = Date.distantPast
+    private var lastProgressNotification = Date.distantPast
 
-    private init() {
-        persistenceKey = Self.overridePersistenceKey ?? "venera.preTranslationTasks.v1"
-        let data = UserDefaults.standard.data(forKey: persistenceKey)
-        tasks = (try? JSONDecoder().decode([PreTranslationTask].self, from: data ?? Data())) ?? []
-        // 重载恢复：上次运行中的任务标记为取消（无法安全续跑 detached job）。
-        tasks = tasks.map { task in
-            guard task.isRunning else { return task }
-            var recovered = task
-            recovered.status = .cancelled
-            recovered.finishedAt = Date()
-            recovered.phase = ""
-            return recovered
-        }
-        persistLocked()
+    private convenience init() {
+        self.init(persistenceKey: Self.overridePersistenceKey ?? "venera.preTranslationTasks.v1")
     }
 
-    public func allTasks() -> [PreTranslationTask] { lock.lock(); defer { lock.unlock() }; return tasks }
+    /// Internal initializer used by lifecycle tests with an isolated store.
+    init(persistenceKey: String) {
+        self.persistenceKey = persistenceKey
+        let data = UserDefaults.standard.data(forKey: persistenceKey)
+        tasks = (try? JSONDecoder().decode([PreTranslationTask].self, from: data ?? Data())) ?? []
+        // Runtime phase text is not a checkpoint. A persisted running task is
+        // intentionally kept running so startup can resume it after sources load.
+        tasks = tasks.map { task in
+            var restored = task
+            if restored.isActive { restored.phase = "" }
+            return restored
+        }
+    }
 
-    /// 启动预翻译。章节页列表在任务内解析；失败页记录索引可精确重试。
+    public func allTasks() -> [PreTranslationTask] {
+        lock.lock()
+        defer { lock.unlock() }
+        return tasks
+    }
+
     @discardableResult
     public func start(
         comic: Comic,
@@ -132,10 +168,10 @@ public final class PreTranslationTaskManager: @unchecked Sendable {
     ) -> PreTranslationTask? {
         let ids = chapters.ids
         let titles = chapters.titles
-        // 过滤有效索引并去重保序。
         var seen = Set<Int>()
         let valid = epIndices.filter { ids.indices.contains($0) && seen.insert($0).inserted }
         guard !valid.isEmpty else { return nil }
+
         let chapterModels = valid.map { ep in
             PreTranslationTask.Chapter(
                 epIndex: ep,
@@ -150,28 +186,76 @@ public final class PreTranslationTaskManager: @unchecked Sendable {
             cover: comic.cover,
             chapters: chapterModels
         )
+
         lock.lock()
-        guard !tasks.contains(where: \.isRunning) else { lock.unlock(); return nil }
+        guard !tasks.contains(where: \.isActive) else {
+            lock.unlock()
+            return nil
+        }
         tasks.insert(task, at: 0)
         trimLocked()
         persistLocked()
         lock.unlock()
         onChange.emit(())
-        jobs[task.id] = Task.detached(priority: .utility) { [weak self] in
-            await self?.run(task: task, comic: comic, source: source, chapters: chapters)
-        }
+
+        launch(taskID: task.id, source: source, comic: comic, mode: .forward)
         return task
     }
 
-    /// 重试失败页：只重跑各章记录的失败索引，成功页不动。
-    /// 没有失败页或已有任务在运行时返回 false。
+    /// Starts persisted running jobs after comic sources have loaded.
+    public func resumePendingTasks() {
+        let ids: [String]
+        lock.lock()
+        ids = tasks.filter(\.isRunning).map(\.id)
+        lock.unlock()
+        for id in ids { launchPersisted(taskID: id, mode: .forward) }
+    }
+
+    public func pause(id: String) {
+        lock.lock()
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isRunning }) else {
+            lock.unlock()
+            return
+        }
+        tasks[index].status = .paused
+        tasks[index].phase = ""
+        persistLocked()
+        lock.unlock()
+        onChange.emit(())
+    }
+
+    @discardableResult
+    public func resume(id: String) -> Bool {
+        lock.lock()
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isPaused }) else {
+            lock.unlock()
+            return false
+        }
+        tasks[index].status = .running
+        tasks[index].finishedAt = nil
+        tasks[index].error = nil
+        persistLocked()
+        let hasJob = jobs[id] != nil
+        lock.unlock()
+        onChange.emit(())
+        if !hasJob { launchPersisted(taskID: id, mode: .forward) }
+        return true
+    }
+
+    /// Retries page-list failures as complete chapters and page failures exactly.
     @discardableResult
     public func retryFailed(id: String) -> Bool {
         lock.lock()
-        guard !tasks.contains(where: \.isRunning),
-              let index = tasks.firstIndex(where: { $0.id == id }) else { lock.unlock(); return false }
+        guard !tasks.contains(where: \.isActive),
+              let index = tasks.firstIndex(where: { $0.id == id }) else {
+            lock.unlock()
+            return false
+        }
         var task = tasks[index]
-        guard task.hasFailures else { lock.unlock(); return false }
+        guard task.hasFailures else {
+            lock.unlock()
+            return false
+        }
         task.status = .running
         task.finishedAt = nil
         task.error = nil
@@ -180,20 +264,16 @@ public final class PreTranslationTaskManager: @unchecked Sendable {
         persistLocked()
         lock.unlock()
         onChange.emit(())
-        guard let comicSource = ComicSourceManager.shared.find(task.sourceKey) else {
-            finish(id: id, status: .failed, error: "Source not found")
-            return true
-        }
-        let comic = Comic(id: task.cid, title: task.title, cover: task.cover, subtitle: "", sourceKey: task.sourceKey)
-        jobs[task.id] = Task.detached(priority: .utility) { [weak self] in
-            await self?.retry(task: task, source: comicSource, comic: comic)
-        }
+        launchPersisted(taskID: id, mode: .failedOnly)
         return true
     }
 
     public func cancel(id: String) {
         lock.lock()
-        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isRunning }) else { lock.unlock(); return }
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isActive }) else {
+            lock.unlock()
+            return
+        }
         tasks[index].status = .cancelled
         tasks[index].finishedAt = Date()
         tasks[index].phase = ""
@@ -206,120 +286,285 @@ public final class PreTranslationTaskManager: @unchecked Sendable {
 
     public func clearHistory() {
         lock.lock()
-        tasks.removeAll { !$0.isRunning }
+        tasks.removeAll { !$0.isActive }
         persistLocked()
         lock.unlock()
         onChange.emit(())
     }
 
-    // MARK: - 执行
-
-    private func run(task: PreTranslationTask, comic: Comic, source: ComicSource, chapters: ComicChapters) async {
-        await process(task: task, comic: comic, source: source, mode: .full)
+    /// Forces the latest in-memory prefix to disk when the app backgrounds.
+    public func checkpoint() {
+        lock.lock()
+        persistLocked()
+        lastProgressPersist = Date()
+        lock.unlock()
     }
 
-    private func retry(task: PreTranslationTask, source: ComicSource, comic: Comic) async {
-        await process(task: task, comic: comic, source: source, mode: .failedOnly)
+    // MARK: - Job lifecycle
+
+    private func launchPersisted(taskID: String, mode: RunMode) {
+        let snapshot: PreTranslationTask?
+        lock.lock()
+        snapshot = tasks.first(where: { $0.id == taskID && $0.isRunning })
+        lock.unlock()
+        guard let task = snapshot else { return }
+        guard let source = ComicSourceManager.shared.find(task.sourceKey) else {
+            finish(id: taskID, status: .failed, error: "Source not found")
+            return
+        }
+        let comic = Comic(
+            id: task.cid,
+            title: task.title,
+            cover: task.cover,
+            subtitle: "",
+            sourceKey: task.sourceKey
+        )
+        launch(taskID: taskID, source: source, comic: comic, mode: mode)
     }
 
-    private enum RunMode { case full, failedOnly }
+    /// Creates and records the job while holding the same lock used by cancel.
+    /// The new task cannot observe manager state until its entry exists in jobs.
+    private func launch(taskID: String, source: ComicSource, comic: Comic, mode: RunMode) {
+        lock.lock()
+        guard jobs[taskID] == nil,
+              let task = tasks.first(where: { $0.id == taskID && $0.isRunning }) else {
+            lock.unlock()
+            return
+        }
+        let job = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.process(task: task, comic: comic, source: source, mode: mode)
+        }
+        jobs[taskID] = job
+        lock.unlock()
+    }
 
     private func process(task: PreTranslationTask, comic: Comic, source: ComicSource, mode: RunMode) async {
-        let sourceLanguage = AppData.shared.settings["imageTranslationSource"].stringValue ?? "auto"
-        let targetLanguage = AppData.shared.settings["imageTranslationTarget"].stringValue ?? "zh"
         var chapterStates = task.chapters
 
-        for (position, chapter) in chapterStates.enumerated() {
-            if Task.isCancelled { break }
-            // 重试模式：没有失败页的章直接跳过（也不解析页列表，避免把
-            // 无关章节误标为失败）。
-            if mode == .failedOnly, chapter.failedPages.isEmpty { continue }
-            setPhase(id: task.id, chapterTitle: chapter.title)
+        for position in chapterStates.indices {
+            guard await waitUntilRunnable(id: task.id) else { return }
+            var state = chapterStates[position]
+            if mode == .failedOnly, !state.hasPageListFailure, state.failedPages.isEmpty { continue }
 
-            // 解析页列表（与阅读器 loadComicPages 完全同源）。
-            guard let pageList = try? await source.loadComicPages(id: comic.id, ep: chapter.eid),
+            setPhase(id: task.id, text: state.title)
+            guard let pageList = try? await source.loadComicPages(id: comic.id, ep: state.eid),
                   !pageList.isEmpty else {
-                // 页列表解析失败记为可重试失败（占位 1 页）。
-                var state = chapterStates[position]
-                state.total = max(state.total, 1)
-                state.failedPages = mode == .full ? [0] : (state.failedPages.isEmpty ? [0] : state.failedPages)
-                state.failed = state.failedPages.count
+                // A chapter-list failure is not page-zero failure. Keeping total
+                // at zero forces a complete re-resolution and retry next time.
+                state.total = 0
+                state.done = 0
+                state.failed = 0
+                state.failedPages = []
+                state.pageListFailed = true
                 chapterStates[position] = state
-                update(id: task.id, chapters: chapterStates)
+                update(id: task.id, chapters: chapterStates, forceCheckpoint: true)
                 continue
             }
-            var state = chapterStates[position]
-            state.total = pageList.count
-            chapterStates[position] = state
-            update(id: task.id, chapters: chapterStates)
 
-            let indices = mode == .full
-                ? Array(pageList.indices)
-                : chapter.failedPages.filter { pageList.indices.contains($0) }
-            for pageIndex in indices {
-                if Task.isCancelled { break }
-                let imageKey = pageList[pageIndex]
-                // 与阅读器 translationCacheKey(for:) 完全一致，预译结果即时命中。
-                let translationKey = "\(comic.sourceKey)/\(comic.id)/\(chapter.eid)/\(imageKey)"
-                let data = await ImageDownloader.shared.load(
-                    imageKey: imageKey,
-                    sourceKey: comic.sourceKey,
-                    cid: comic.id,
-                    eid: chapter.eid,
+            let previousTotal = state.total
+            let pageListChanged = previousTotal > 0 && previousTotal != pageList.count
+            if pageListChanged {
+                // The source changed its page list. Re-evaluate the chapter from
+                // the beginning; already rendered cache entries still short-circuit.
+                state.done = 0
+                state.failed = 0
+                state.failedPages = []
+            }
+            let wasPageListFailure = state.hasPageListFailure
+            state.total = pageList.count
+            state.pageListFailed = false
+            chapterStates[position] = state
+            update(id: task.id, chapters: chapterStates, forceCheckpoint: wasPageListFailure)
+
+            let retryOnlyExistingPages = mode == .failedOnly && !wasPageListFailure && !pageListChanged
+            let indices: [Int]
+            if retryOnlyExistingPages {
+                indices = state.failedPages.filter { pageList.indices.contains($0) }.sorted()
+            } else {
+                let start = min(max(state.done + state.failed, 0), pageList.count)
+                indices = Array(pageList.indices.dropFirst(start))
+            }
+            guard !indices.isEmpty else { continue }
+
+            let concurrency = translationConcurrency
+            for batchStart in stride(from: 0, to: indices.count, by: concurrency) {
+                guard await waitUntilRunnable(id: task.id) else { return }
+                let batch = Array(indices[batchStart..<min(batchStart + concurrency, indices.count)])
+                let firstDisplay = (batch.first ?? 0) + 1
+                let lastDisplay = (batch.last ?? 0) + 1
+                setPhase(id: task.id, text: "\(state.title) · \(firstDisplay)-\(lastDisplay)/\(pageList.count)")
+
+                let outcomes = await processBatch(
+                    indices: batch,
+                    pageList: pageList,
+                    comic: comic,
+                    chapter: state,
                     source: source
                 )
+                guard isActive(id: task.id) else { return }
+
                 state = chapterStates[position]
-                do {
-                    guard let data else { throw ImageTranslationService.ServiceError.invalidImage }
-                    // noText 视为完成：该页已处理，只是没有可翻译内容。
-                    _ = try await ImageTranslationService.shared.translate(
-                        imageData: data,
-                        cacheKey: translationKey,
-                        sourceLanguage: sourceLanguage,
-                        targetLanguage: targetLanguage
-                    )
-                    state.done += 1
-                    state.failedPages.removeAll { $0 == pageIndex }
-                } catch {
-                    if !state.failedPages.contains(pageIndex) { state.failedPages.append(pageIndex) }
+                for outcome in outcomes.sorted(by: { $0.index < $1.index }) {
+                    if retryOnlyExistingPages {
+                        guard state.failedPages.contains(outcome.index) else { continue }
+                        if outcome.succeeded {
+                            state.failedPages.removeAll { $0 == outcome.index }
+                            state.failed = state.failedPages.count
+                            state.done += 1
+                        }
+                    } else if outcome.succeeded {
+                        state.done += 1
+                    } else {
+                        if !state.failedPages.contains(outcome.index) {
+                            state.failedPages.append(outcome.index)
+                        }
+                        state.failed = state.failedPages.count
+                    }
                 }
-                state.failed = state.failedPages.count
                 chapterStates[position] = state
+                // Commit only complete batches. A terminated process redoes at
+                // most one small batch, whose successful translations are cached.
                 update(id: task.id, chapters: chapterStates)
             }
         }
 
-        if Task.isCancelled {
-            finish(id: task.id, status: .cancelled)
-        } else {
-            finish(id: task.id, status: .completed)
+        guard currentStatus(id: task.id) == .running else { return }
+        let latest = taskSnapshot(id: task.id)
+        let finalStatus: PreTranslationTask.Status = {
+            guard let latest else { return .failed }
+            return latest.hasFailures && latest.done == 0 ? .failed : .completed
+        }()
+        finish(id: task.id, status: finalStatus)
+    }
+
+    private func processBatch(
+        indices: [Int],
+        pageList: [String],
+        comic: Comic,
+        chapter: PreTranslationTask.Chapter,
+        source: ComicSource
+    ) async -> [PageOutcome] {
+        let sourceLanguage = AppData.shared.settings["imageTranslationSource"].stringValue ?? "auto"
+        let targetLanguage = AppData.shared.settings["imageTranslationTarget"].stringValue ?? "zh"
+
+        return await withTaskGroup(of: PageOutcome.self, returning: [PageOutcome].self) { group in
+            for pageIndex in indices {
+                let imageKey = pageList[pageIndex]
+                group.addTask {
+                    if Task.isCancelled { return PageOutcome(index: pageIndex, succeeded: false) }
+                    let translationKey = "\(comic.sourceKey)/\(comic.id)/\(chapter.eid)/\(imageKey)"
+                    let data = await ImageDownloader.shared.load(
+                        imageKey: imageKey,
+                        sourceKey: comic.sourceKey,
+                        cid: comic.id,
+                        eid: chapter.eid,
+                        source: source
+                    )
+                    do {
+                        guard let data else { throw ImageTranslationService.ServiceError.invalidImage }
+                        _ = try await ImageTranslationService.shared.translate(
+                            imageData: data,
+                            cacheKey: translationKey,
+                            sourceLanguage: sourceLanguage,
+                            targetLanguage: targetLanguage
+                        )
+                        return PageOutcome(index: pageIndex, succeeded: true)
+                    } catch ImageTranslationService.ServiceError.noText {
+                        // A valid text-free page is fully processed, not failed.
+                        return PageOutcome(index: pageIndex, succeeded: true)
+                    } catch {
+                        return PageOutcome(index: pageIndex, succeeded: false)
+                    }
+                }
+            }
+            var results: [PageOutcome] = []
+            for await outcome in group { results.append(outcome) }
+            return results
         }
     }
 
-    // MARK: - 状态更新（锁内合并读改写）
-
-    private func update(id: String, chapters: [PreTranslationTask.Chapter]) {
-        lock.lock()
-        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isRunning }) else { lock.unlock(); return }
-        tasks[index].chapters = chapters
-        persistLocked()
-        lock.unlock()
-        onChange.emit(())
+    private var translationConcurrency: Int {
+        let image = AppData.shared.settings["imageTranslationImageConcurrency"].intValue ?? 3
+        let llm = AppData.shared.settings["imageTranslationLlmConcurrency"].intValue ?? 2
+        return min(max(min(image, llm), 1), 4)
     }
 
-    private func setPhase(id: String, chapterTitle: String) {
+    private func waitUntilRunnable(id: String) async -> Bool {
+        while !Task.isCancelled {
+            switch currentStatus(id: id) {
+            case .running:
+                return true
+            case .paused:
+                try? await Task.sleep(for: .milliseconds(250))
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
+    // MARK: - State and persistence
+
+    private func currentStatus(id: String) -> PreTranslationTask.Status? {
         lock.lock()
-        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isRunning }) else { lock.unlock(); return }
-        tasks[index].phase = chapterTitle
-        persistLocked()
+        defer { lock.unlock() }
+        return tasks.first(where: { $0.id == id })?.status
+    }
+
+    private func isActive(id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return tasks.first(where: { $0.id == id })?.isActive == true
+    }
+
+    private func taskSnapshot(id: String) -> PreTranslationTask? {
+        lock.lock()
+        defer { lock.unlock() }
+        return tasks.first(where: { $0.id == id })
+    }
+
+    private func update(id: String, chapters: [PreTranslationTask.Chapter], forceCheckpoint: Bool = false) {
+        let shouldNotify: Bool
+        lock.lock()
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isActive }) else {
+            lock.unlock()
+            return
+        }
+        tasks[index].chapters = chapters
+        let now = Date()
+        if forceCheckpoint || now.timeIntervalSince(lastProgressPersist) >= 1 {
+            persistLocked()
+            lastProgressPersist = now
+        }
+        shouldNotify = forceCheckpoint || now.timeIntervalSince(lastProgressNotification) >= 0.25
+        if shouldNotify { lastProgressNotification = now }
         lock.unlock()
-        onChange.emit(())
+        if shouldNotify { onChange.emit(()) }
+    }
+
+    private func setPhase(id: String, text: String) {
+        let shouldNotify: Bool
+        lock.lock()
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isActive }) else {
+            lock.unlock()
+            return
+        }
+        tasks[index].phase = text
+        let now = Date()
+        shouldNotify = now.timeIntervalSince(lastProgressNotification) >= 0.25
+        if shouldNotify { lastProgressNotification = now }
+        lock.unlock()
+        if shouldNotify { onChange.emit(()) }
     }
 
     private func finish(id: String, status: PreTranslationTask.Status, error: String? = nil) {
         lock.lock()
         jobs.removeValue(forKey: id)
-        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isRunning }) else { lock.unlock(); return }
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.isRunning }) else {
+            lock.unlock()
+            return
+        }
         tasks[index].status = status
         tasks[index].finishedAt = Date()
         tasks[index].phase = ""
@@ -331,7 +576,10 @@ public final class PreTranslationTaskManager: @unchecked Sendable {
 
     private func trimLocked() {
         guard tasks.count > historyLimit else { return }
-        tasks.removeLast(tasks.count - historyLimit)
+        // Never discard an active task when trimming old history.
+        let active = tasks.filter(\.isActive)
+        let history = tasks.filter { !$0.isActive }
+        tasks = active + Array(history.prefix(max(historyLimit - active.count, 0)))
     }
 
     private func persistLocked() {

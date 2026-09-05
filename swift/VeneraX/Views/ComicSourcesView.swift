@@ -301,7 +301,12 @@ struct ComicSourcesView: View {
         guard !urlString.isEmpty else { return }
         isInstalling = true
         defer { isInstalling = false }
-        let response = await HTTPClient.shared.request(method: "GET", url: urlString)
+        guard SourceURL.isValid(urlString) else {
+            self.error = "Invalid source URL"
+            return
+        }
+        let sourceURL = SourceURL(urlString)
+        let response = await HTTPClient.shared.request(method: "GET", url: sourceURL.url, headers: sourceURL.headers(["cache-time": "no"]))
         if let error = response.error {
             self.error = error
             return

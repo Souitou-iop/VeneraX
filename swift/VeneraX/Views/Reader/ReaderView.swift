@@ -16,20 +16,30 @@ struct ReaderView: View {
     @State private var showPageJumpDialog = false
     @State private var pageJumpInput = ""
     @Environment(\.dismiss) private var dismiss
-
-    private var timeTracker: ReadingTimeTracker
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isVisible = false
+    @State private var timeTracker: ReadingTimeTracker
 
     init(comic: Comic, source: ComicSource?, epIndex: Int = 0, chapters: ComicChapters?) {
         let model = ReaderModel(comic: comic, source: source, epIndex: epIndex)
         model.setChapters(chapters)
         _model = State(initialValue: model)
-        timeTracker = ReadingTimeTracker(
+        _timeTracker = State(initialValue: ReadingTimeTracker(
             id: comic.id,
             type: ComicID.forSource(comic.sourceKey),
             title: comic.title,
             subtitle: comic.subtitle,
             cover: comic.cover
-        )
+        ))
+    }
+
+    private func updateReadingTimer() {
+        if isVisible, scenePhase == .active, !model.isLoadingPages,
+           model.errorMessage == nil, !model.pages.isEmpty {
+            timeTracker.start()
+        } else {
+            timeTracker.stop()
+        }
     }
 
     var body: some View {
@@ -64,16 +74,17 @@ struct ReaderView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .task {
             await model.loadPages()
+            guard !Task.isCancelled else { return }
             model.recordHistory()
             refreshFavoriteState()
-            timeTracker.start()
+            updateReadingTimer()
         }
         .task(id: isAutoPageTurning) {
-            guard isAutoPageTurning else { return }
+            guard isAutoPageTurning, scenePhase == .active else { return }
             let seconds = max(1, AppData.shared.settings["autoPageTurningInterval"].intValue ?? 5)
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(seconds))
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, scenePhase == .active, isVisible else { return }
                 guard !model.isLoadingPages, model.errorMessage == nil else { continue }
                 let advanced = await ReaderPageTurning.goNext(model, chapterTransition: $chapterTransition)
                 if !advanced {
@@ -82,9 +93,22 @@ struct ReaderView: View {
                 }
             }
         }
+        .onAppear {
+            isVisible = true
+            updateReadingTimer()
+        }
         .onDisappear {
+            isVisible = false
             isAutoPageTurning = false
             timeTracker.stop()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { isAutoPageTurning = false }
+            updateReadingTimer()
+        }
+        .onChange(of: model.isLoadingPages) { _, _ in updateReadingTimer() }
+        .onChange(of: showChapters || showChapterComments || showPageJumpDialog) { _, obscured in
+            if obscured { isAutoPageTurning = false }
         }
         .onChange(of: model.currentIndex) { _, _ in
             refreshFavoriteState()

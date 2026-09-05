@@ -154,5 +154,22 @@ final class MoreFeaturesExtendedTests: XCTestCase {
         guard let syncUrl = URL(string: "venera://sync/config?url=https://dav.test&user=usr&pass=pwd") else { return }
         let syncRoute = await AppLinksHandler.parse(url: syncUrl)
         XCTAssertEqual(syncRoute, .syncConfig(url: "https://dav.test", user: "usr", pass: "pwd"))
+
+        let tasksRoute = await AppLinksHandler.parse(url: URL(string: "venera://tasks")!)
+        XCTAssertEqual(tasksRoute, .tasks)
+    }
+}
+
+extension MoreFeaturesExtendedTests {
+    func testSourceURLStripsCredentialsAndBuildsBasicAuth() {
+        let source = SourceURL("http://alice:p%40ss@localhost:8080/source.js")
+        XCTAssertEqual(source.url, "http://localhost:8080/source.js")
+        XCTAssertEqual(source.headers()["Authorization"], "Basic YWxpY2U6cEBzcw==")
+    }
+
+    func testSourceURLAcceptsLocalhostAndIPv6ButRejectsOtherSchemes() {
+        XCTAssertTrue(SourceURL.isValid("http://localhost:8080/source.js"))
+        XCTAssertTrue(SourceURL.isValid("https://[::1]/source.js"))
+        XCTAssertFalse(SourceURL.isValid("file:///tmp/source.js"))
     }
 }
