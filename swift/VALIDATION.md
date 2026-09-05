@@ -336,3 +336,29 @@ xcodebuild -scheme VeneraX -sdk iphonesimulator -derivedDataPath .../VeneraX-par
 - `readerScreenPicNumber*` / `galleryFillScreen` / `readerScrollSpeed` / `readerPageSpacing` / `readerCenterPageOnTurn` / `enableContinuousChapterReading` 经查证为 Swift 阅读器**未消费的死设置**（阅读器从未读取，画廊多页布局未实现）——既有缺口，本轮仅保证其作用域写入正确，功能补全另行立项。
 - 阅读器菜单里的日/夜快捷切换仍写全局键（对齐上游 scaffold 快捷行为）；漫画级修改经设置 sheet 生效。
 - UI 交互走查（漫画开关切换的行刷新、sheet 关闭后模式同步）留待模拟器空闲时验证。
+
+## 2026-09-06：三线合流后模拟器走查（聚合搜索 + 阅读设置作用域）与开关行修复
+
+### 走查结果（iPhone 17 / iOS 26.5，构建 = Swift-native 9e78439e + 本轮修复）
+
+- **聚合搜索**：4 个可搜索源并发查询，Komiic 真实网络结果渲染（封面/作者/标签），包子漫画渐进入场；再漫画/Picacg 的 TypeError 为源脚本自身解析问题，错误行正确显示；页内改词重搜（告白→少女）各分区即时刷新并写搜索历史；搜索历史项点击可直接提交。
+- **searchSources 筛选**：设置 > 发现 > 搜索源 全部取消 → 聚合页显示「未选择搜索源 / 请在设置 > 搜索源中启用搜索源」空态；恢复勾选后正常。
+- **阅读设置作用域（全局页）**：「使用设备独立设置」开关开启后出现「重置设备阅读设置」；开启状态下改「页面动画」，appdata 验证写入 `deviceSpecificSettings[deviceId].enablePageAnimation=false` 且全局键未被污染；关闭开关后设备值保留。
+- **阅读设置作用域（漫画级）**：阅读器菜单「阅读设置」以漫画上下文打开 sheet；「启用此漫画特定设置」开启后出现重置行；改阅读模式为连续（从上到下）→ `comicSpecificSettings` 落盘 `{"469@Komiic": {"enabled": true, "readerMode": "continuousTopToBottom"}}`（复合键与 Flutter 互通）；sheet 内条件行按生效模式即时切换（画廊数量行 ↔ 连续滚速/居中/间距行）；「完成」后阅读器即时切换连续模式（页码变连续索引、章节衔接渲染）。
+
+### 走查发现并修复的 bug
+
+- **SettingToggleRow 视觉与存储不同步**：组件此前用外部直读 binding，写入后无任何 @State 变化触发重渲染——辅助功能/自动化路径（AXPress 不产生乐观视觉切换）下开关显示与实际存储不一致（实测：设备级已写 false 而开关仍显示开）。修复：改为内部 `@State isOn` 驱动 + `onChange` 落盘 + `onAppear` 与生效值同步。修复后实测点击即时同步、重启后按生效链正确回显。
+- 复查确认 SettingPickerRow 本就以内内部 @State 驱动，无同类问题。
+
+### 验证结果
+
+```text
+VeneraKit: 173 tests, 0 failures, 1 skipped
+xcodebuild Debug iphonesimulator → BUILD SUCCEEDED（含修复）
+```
+
+### 环境备注
+
+- 覆盖安装（simctl install 同 bundle id）会触发应用容器 UUID 迁移（83330E2A… → 79BC484D…），数据完整保留，但脚本中缓存的容器路径需重新获取。
+- 走查过程遵循用户要求，结束后已关闭模拟器。

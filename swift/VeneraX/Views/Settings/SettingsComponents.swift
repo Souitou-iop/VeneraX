@@ -129,6 +129,8 @@ struct SettingPickerRow: View {
 }
 
 /// 开关行（对齐 _SwitchSetting）。
+/// 用内部 @State 驱动视觉，写入经 onChange 落盘——保证辅助功能/自动化触发
+/// （AXPress 不产生乐观视觉切换）时开关显示与实际存储一致。
 struct SettingToggleRow: View {
     let title: String
     let key: String
@@ -137,19 +139,28 @@ struct SettingToggleRow: View {
     var scope: ReaderSettingScope?
     var onChange: ((Bool) -> Void)?
 
+    @State private var isOn: Bool
+
+    init(
+        title: String,
+        key: String,
+        subtitle: String? = nil,
+        defaultValue: Bool = false,
+        scope: ReaderSettingScope? = nil,
+        onChange: ((Bool) -> Void)? = nil
+    ) {
+        self.title = title
+        self.key = key
+        self.subtitle = subtitle
+        self.defaultValue = defaultValue
+        self.scope = scope
+        self.onChange = onChange
+        let current = (scope?.effective(key) ?? AppData.shared.settings[key]).boolValue ?? defaultValue
+        _isOn = State(initialValue: current)
+    }
+
     var body: some View {
-        Toggle(isOn: Binding(
-            get: { (scope?.effective(key) ?? AppData.shared.settings[key]).boolValue ?? defaultValue },
-            set: {
-                if let scope {
-                    scope.write(key, value: .bool($0))
-                } else {
-                    AppData.shared.settings[key] = .bool($0)
-                }
-                AppData.shared.saveData()
-                onChange?($0)
-            }
-        )) {
+        Toggle(isOn: $isOn) {
             if let subtitle {
                 Text(title)
                 Text(subtitle)
@@ -157,6 +168,21 @@ struct SettingToggleRow: View {
                     .foregroundStyle(.secondary)
             } else {
                 Text(title)
+            }
+        }
+        .onChange(of: isOn) { _, newValue in
+            if let scope {
+                scope.write(key, value: .bool(newValue))
+            } else {
+                AppData.shared.settings[key] = .bool(newValue)
+            }
+            AppData.shared.saveData()
+            onChange?(newValue)
+        }
+        .onAppear {
+            let current = (scope?.effective(key) ?? AppData.shared.settings[key]).boolValue ?? defaultValue
+            if isOn != current {
+                isOn = current
             }
         }
     }
