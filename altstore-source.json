@@ -2,15 +2,15 @@
   "name": "Venera",
   "identifier": "io.github.kyosee.venera",
   "subtitle": "A cross-platform manga/comic reader",
-  "iconURL": "https://raw.githubusercontent.com/Kyosee/venera/master/assets/app_icon.png",
+  "iconURL": "https://raw.githubusercontent.com/Souitou-iop/VeneraX/master/assets/app_icon.png",
   "apps": [
     {
       "name": "Venera",
       "bundleIdentifier": "io.github.kyosee.venera",
-      "developerName": "Kyosee",
+      "developerName": "Souitou-iop",
       "subtitle": "A cross-platform manga/comic reader",
       "localizedDescription": "Venera is a cross-platform manga/comic reader.",
-      "iconURL": "https://raw.githubusercontent.com/Kyosee/venera/master/assets/app_icon.png",
+      "iconURL": "https://raw.githubusercontent.com/Souitou-iop/VeneraX/master/assets/app_icon.png",
       "category": "entertainment",
       "screenshots": [],
       "versions": [

@@ -5,7 +5,7 @@
 /// repository link all resolve through these. Left pointing upstream, a fork
 /// would compare against upstream releases and offer the upstream build as its
 /// own update.
-const kUpdateRepoOwner = 'Kyosee';
+const kUpdateRepoOwner = 'Souitou-iop';
 const kUpdateRepoName = 'VeneraX';
 
 class AboutSettings extends StatefulWidget {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const ICON = 'https://raw.githubusercontent.com/Kyosee/venera/master/assets/app_icon.png';
+const ICON = 'https://raw.githubusercontent.com/Souitou-iop/VeneraX/master/assets/app_icon.png';
 
 // The beta source is a separate AltStore feed for internal test builds. It uses
 // a distinct source name/identifier so a device can subscribe to it without
@@ -20,7 +20,7 @@ function template(beta) {
     apps: [{
       name: `Venera${suffix}`,
       bundleIdentifier: 'io.github.kyosee.venera',
-      developerName: 'Kyosee',
+      developerName: 'Souitou-iop',
       subtitle: beta
         ? 'Internal test builds — expect bugs'
         : 'A cross-platform manga/comic reader',

@@ -150,7 +150,7 @@ keyPassword=你的 key 密码
 如果要把构建产物分发出去，必须先改 [`lib/pages/settings/about.dart`](lib/pages/settings/about.dart) 开头的两个常量：
 
 ```dart
-const kUpdateRepoOwner = 'Kyosee';
+const kUpdateRepoOwner = 'Souitou-iop';
 const kUpdateRepoName = 'VeneraX';
 ```
 

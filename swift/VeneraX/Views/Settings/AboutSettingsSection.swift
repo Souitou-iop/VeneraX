@@ -56,7 +56,7 @@ actor AppUpdateChecker {
 /// 应用内指南随 M5 迁移）。
 struct AboutSettingsSection: View {
     @Environment(AppState.self) private var appState
-    nonisolated static let repoOwner = "Kyosee"
+    nonisolated static let repoOwner = "Souitou-iop"
     nonisolated static let repoName = "VeneraX"
 
     @State private var isCheckingUpdate = false

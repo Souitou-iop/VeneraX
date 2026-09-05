@@ -157,7 +157,7 @@ flutter_to_arch:
   icon: debian/gui/venera.png
   categories: Utility
   keywords: Flutter;comic;images;
-  url: https://github.com/Kyosee/VeneraX
+  url: https://github.com/Souitou-iop/VeneraX
   depends:
     - gtk3
     - webkit2gtk-4.1

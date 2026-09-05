@@ -151,7 +151,7 @@ keyPassword=your key password
 If you intend to distribute your builds, you must first edit the two constants at the top of [`lib/pages/settings/about.dart`](lib/pages/settings/about.dart):
 
 ```dart
-const kUpdateRepoOwner = 'Kyosee';
+const kUpdateRepoOwner = 'Souitou-iop';
 const kUpdateRepoName = 'VeneraX';
 ```
 
