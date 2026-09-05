@@ -29,7 +29,11 @@ struct FollowUpdatesView: View {
                 .padding(.vertical, 4)
             }
 
-            if updatedComics.isEmpty && !isChecking {
+            // 空状态只看数据本身。若把 isChecking 也纳入条件，检查开始/结束
+            // 会在「空状态卡片」与「空分区头」之间来回切换，List 的交叉淡化
+            // 会把两份文字叠影渲染（实测）。检查中的反馈由头部按钮与进度
+            // 文案承担，这里保持结构稳定。
+            if updatedComics.isEmpty {
                 if !FollowUpdateScope.isConfigured {
                     ContentUnavailableView {
                         Label("Follow Updates".tl, systemImage: "bell.slash")

@@ -255,3 +255,9 @@ com.apple.DocumentManager.Service [TAP] Couldn't get FPItem from node for
 - 「立即检查」改为 iOS 26 原生液态玻璃按钮 `buttonStyle(.glass)`（iOS 18 回退 borderedProminent + 白色前景）。
 - 检查中不再用裸 ProgressView 整体替换按钮：按钮原位切换为旋转指示 + 「检查中」并禁用，头卡布局不跳动；`reload()` 与检查状态切换包进 `withAnimation`，消除更新卡片闪烁。
 - 模拟器验证（iOS 26.5）：按钮呈半透明玻璃胶囊、强调色图标清晰；点击后任务创建/完成、按钮状态回弹正常（本库 17 部收藏漫画因源 key 无法解析瞬间失败，属导入数据依赖）。
+
+### 2026-09-06 补丁：追更空状态与「已更新漫画」分区叠影修复
+
+- 根因：空状态条件含 `!isChecking`，检查开始/结束时在「无更新卡片」与空的「已更新漫画」分区之间来回切换，List 的 withAnimation 交叉淡化把两份文字叠影渲染（用户截图实证）。
+- 修复：空状态只依赖 `updatedComics.isEmpty`，结构全程稳定；检查中的反馈由头部按钮（原位旋转指示）与进度文案承担。
+- 模拟器复测（iOS 26.5）：点击「立即检查」后任务正常创建/完成，检查中与结束后均无叠影，页面仅显示头部卡片与空状态卡片。
