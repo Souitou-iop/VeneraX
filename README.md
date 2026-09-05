@@ -1,8 +1,9 @@
 <div align="center">
-  <img src="assets/new_logo.png" width="180" alt="VeneraX" />
+  <img src="assets/veneraswift_icon.png" width="180" alt="VeneraX" />
   <h1>VeneraX</h1>
 
-[![Flutter](https://img.shields.io/badge/flutter-3.44.3-blue)](https://flutter.dev/)
+[![Swift](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)](https://www.swift.org)
+[![iOS](https://img.shields.io/badge/iOS%20%7C%20iPadOS-18%2B-0968da?logo=apple&logoColor=white)](swift/VeneraX.xcodeproj)
 ![AI-Driven](https://img.shields.io/badge/AI--Driven-Claude%20|%20Codex%20|%20DeepSeek-6e47ff)
 [![License](https://img.shields.io/github/license/Kyosee/VeneraX)](https://github.com/Kyosee/VeneraX/blob/master/LICENSE)
 [![Stars](https://img.shields.io/github/stars/Kyosee/VeneraX?style=flat)](https://github.com/Kyosee/VeneraX/stargazers)
@@ -11,14 +12,46 @@
   <h3>中文 | <a href="README_EN.md">English</a></h3>
 </div>
 
-VeneraX 是一个 Fork 自 Venera 并在原版基础上进行维护与增强，免费开源的多平台漫画阅读应用。
+VeneraX 是一个 Fork 自 Venera 的免费开源漫画阅读应用。**当前分支 `Swift-native` 是 VeneraX 的 Swift 原生重写版本**：以 SwiftUI 从零构建 iOS / iPadOS 原生体验，兼容 Venera 的 JavaScript 漫画源扩展生态；Flutter 版作为上游基线保留在本仓库中，见 [Flutter 版（上游基线）](#flutter-版上游基线)。
 
 > **原始项目：** 本项目 fork 自 [venera-app/venera](https://github.com/venera-app/venera)。
 
 > [!IMPORTANT]
 > **在下载、安装或使用本软件前，请务必仔细阅读并充分理解[《用户协议与免责声明》](#用户协议与免责声明)的全部内容。** 您一旦下载、安装、复制、修改或使用本软件，即视为已阅读、理解并同意接受该声明的全部内容；如不同意，请勿使用并立即删除本软件。
 
-## 新功能&优化
+## Swift 原生版
+
+用 SwiftUI 重写的 iOS / iPadOS 原生应用，目标是把 VeneraX 在 Flutter 版上积累的能力完整带到 Apple 平台的原生体验中。
+
+### 亮点
+
+- **原生双形态适配**：iPhone 使用 TabView、iPad / Mac 使用 NavigationSplitView 的响应式布局，跟进 iOS 26 的 Liquid Glass 设计语言
+- **兼容 Venera 扩展生态**：内置 JavaScript 漫画源引擎（SwiftSoup / ZIP Foundation），可直接安装社区漫画源，支持本地 `.js` 文件导入、相关源推荐与重试、探索页搜索过滤
+- **追更与任务中心**：追更范围与检查周期可配置，任务中心支持后台批量执行（含整章 AI 预翻译）
+- **阅读体验**：连续章节无缝阅读、阅读中页跳转、隐藏重复章节、按作品 / 设备维度的阅读设置
+- **持续加固**：任务流与备份导入持续强化，模型层拥有 150+ 单元测试
+
+> 功能对等进度、验证边界与架构交接详见 [`swift/PARITY.md`](swift/PARITY.md)、[`swift/VALIDATION.md`](swift/VALIDATION.md)、[`swift/HANDOVER.md`](swift/HANDOVER.md)。
+
+### 环境要求与构建
+
+- Xcode 26+（iOS 26 SDK），Swift 6.0，部署目标 iOS / iPadOS 18.0+
+- 本地构建与测试：
+
+```bash
+# VeneraKit 单元测试
+swift test --package-path swift/VeneraKit --disable-sandbox
+
+# 模拟器构建（也可直接用 Xcode 打开 swift/VeneraX.xcodeproj 后 Run）
+xcodebuild -project swift/VeneraX.xcodeproj -scheme VeneraX \
+  -destination 'platform=iOS Simulator,name=iPhone 17' build
+```
+
+## Flutter 版（上游基线）
+
+VeneraX 最初基于 Flutter 3.44.3 实现，覆盖 Android / Windows / Linux / macOS / iOS 多平台，是 Swift 原生版的功能参照基线，相关功能仍在持续维护与增强。
+
+### 新功能&优化
 
 - [x] WebDAV 备份与同步优化
 - [x] Windows 与 Android APK 自动检查更新
@@ -41,11 +74,11 @@ VeneraX 是一个 Fork 自 Venera 并在原版基础上进行维护与增强，�
 - [x] 阅读时 AI 翻译（实验性）：图片与 OCR 均在本机处理，仅将识别文字发送到用户自行配置的 LLM；服务商支持新手模板/模型拉取与高级自定义，提供省资源、均衡、快速档位，支持整章预翻译、智能消字与受限区域嵌字
 - [x] 自定义合集：把分卷、分部发布的多本漫画合成一本阅读，可跨来源
 
-## 使用说明
+### 使用说明
 
 各功能的配置步骤与操作方式详见 **[使用说明](doc/guide.zh.md)**。应用内亦可查阅：设置 → 关于 → 使用说明。
 
-## 构建
+### 构建
 
 <details>
 <summary><b>本地构建</b></summary>
@@ -137,7 +170,7 @@ const kUpdateRepoName = 'VeneraX';
 
 </details>
 
-## 迁移提示
+### 迁移提示
 
 从 [venera-app/venera](https://github.com/venera-app/venera) 迁移时，请为 WebDAV 同步指定独立目录，不要与原项目共用。迁移前建议备份旧数据。
 

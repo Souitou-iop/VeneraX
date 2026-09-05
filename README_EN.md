@@ -1,8 +1,9 @@
 <div align="center">
-  <img src="assets/new_logo.png" width="180" alt="VeneraX" />
+  <img src="assets/veneraswift_icon.png" width="180" alt="VeneraX" />
   <h1>VeneraX</h1>
 
-[![Flutter](https://img.shields.io/badge/flutter-3.44.3-blue)](https://flutter.dev/)
+[![Swift](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)](https://www.swift.org)
+[![iOS](https://img.shields.io/badge/iOS%20%7C%20iPadOS-18%2B-0968da?logo=apple&logoColor=white)](swift/VeneraX.xcodeproj)
 ![AI-Driven](https://img.shields.io/badge/AI--Driven-Claude%20|%20Codex%20|%20DeepSeek-6e47ff)
 [![License](https://img.shields.io/github/license/Kyosee/VeneraX)](https://github.com/Kyosee/VeneraX/blob/master/LICENSE)
 [![Stars](https://img.shields.io/github/stars/Kyosee/VeneraX?style=flat)](https://github.com/Kyosee/VeneraX/stargazers)
@@ -11,14 +12,46 @@
   <h3><a href="README.md">中文</a> | English</h3>
 </div>
 
-VeneraX is a free and open-source, multi-platform comic reader forked from Venera and maintained with enhancements over the original.
+VeneraX is a free and open-source comic reader forked from Venera. **The current `Swift-native` branch is a full native rewrite of VeneraX in Swift**: a from-scratch SwiftUI experience for iOS / iPadOS that stays compatible with Venera's JavaScript comic-source extension ecosystem. The Flutter app remains in this repository as the upstream baseline — see [The Flutter App (Upstream Baseline)](#the-flutter-app-upstream-baseline).
 
 > **Original Project:** This project is forked from [venera-app/venera](https://github.com/venera-app/venera).
 
 > [!IMPORTANT]
 > **Before downloading, installing, or using this software, please read and fully understand the [User Agreement & Disclaimer](#user-agreement--disclaimer).** By downloading, installing, copying, modifying, or using this software, you are deemed to have read, understood, and accepted it in its entirety; if you do not agree, do not use the software and delete it immediately.
 
-## New Features & Improvements
+## The Swift-Native App
+
+A native iOS / iPadOS application rewritten in SwiftUI, with the goal of bringing everything VeneraX accumulated in the Flutter app to a truly native Apple-platform experience.
+
+### Highlights
+
+- **Native dual-form layout**: responsive adaptive layout with TabView on iPhone and NavigationSplitView on iPad / Mac, following the iOS 26 Liquid Glass design language
+- **Venera extension ecosystem compatible**: a built-in JavaScript comic-source engine (SwiftSoup / ZIP Foundation) that installs community comic sources directly, with local `.js` file import, related-source recommendations with retry, and explore-page search filtering
+- **Follow-updates & task center**: configurable follow-update scope and check interval; the task center runs background jobs in batch, including whole-chapter AI pre-translation
+- **Reading experience**: seamless continuous-chapter reading, in-reader page jumping, duplicate-chapter hiding, and per-comic / per-device reading settings
+- **Continuously hardened**: task flows and backup import keep getting tougher, backed by 150+ unit tests at the model layer
+
+> See [`swift/PARITY.md`](swift/PARITY.md), [`swift/VALIDATION.md`](swift/VALIDATION.md) and [`swift/HANDOVER.md`](swift/HANDOVER.md) for feature-parity progress, validation boundaries, and architecture handover details.
+
+### Requirements & Building
+
+- Xcode 26+ (iOS 26 SDK), Swift 6.0, deployment target iOS / iPadOS 18.0+
+- Local build and test:
+
+```bash
+# VeneraKit unit tests
+swift test --package-path swift/VeneraKit --disable-sandbox
+
+# Simulator build (or open swift/VeneraX.xcodeproj in Xcode and Run)
+xcodebuild -project swift/VeneraX.xcodeproj -scheme VeneraX \
+  -destination 'platform=iOS Simulator,name=iPhone 17' build
+```
+
+## The Flutter App (Upstream Baseline)
+
+VeneraX started as a Flutter 3.44.3 app covering Android / Windows / Linux / macOS / iOS. It remains the feature reference baseline for the Swift-native app and is still maintained with new capabilities.
+
+### New Features & Improvements
 
 - [x] Improved WebDAV backup & sync
 - [x] Automatic update checks on Windows and Android APK
@@ -42,11 +75,11 @@ VeneraX is a free and open-source, multi-platform comic reader forked from Vener
 - [x] AI page translation while reading (experimental): images and OCR stay on-device, and only recognized text is sent to an LLM you configure; beginner provider templates/model fetching plus advanced custom settings, resource-saving/balanced/fast presets, whole-chapter pre-translation, smart erase and bounded text layout
 - [x] Custom collections: read comics published as separate volumes or parts as one, across sources
 
-## Guide
+### Guide
 
 Setup steps and interactions for each feature are documented in the **[guide](doc/guide.en.md)**. It is also available in the app under Settings → About → Guide.
 
-## Building
+### Building
 
 <details>
 <summary><b>Local build</b></summary>
@@ -138,7 +171,7 @@ Also: the two `Update_AltStore_*` jobs commit an AltStore manifest back to maste
 
 </details>
 
-## Migration
+### Migration
 
 If migrating from [venera-app/venera](https://github.com/venera-app/venera), use a separate WebDAV sync directory. Back up your old data before migrating.
 
