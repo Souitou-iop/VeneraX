@@ -211,12 +211,22 @@ public final class ReaderModel {
         self.comic = comic
         self.source = source
         self.currentEpIndex = epIndex
+        self.settingScope = ReaderSettingScope(comicId: comic.id, sourceKey: comic.sourceKey)
         let settings = AppData.shared.settings
-        let modeValue = settings.getReaderSetting(comicId: comic.id, sourceKey: comic.sourceKey, key: "readerMode")
-        let modeString = modeValue.stringValue ?? "galleryLeftToRight"
+        let modeString = settings.getReaderSetting(comicId: comic.id, sourceKey: comic.sourceKey, key: "readerMode")
+            .stringValue ?? "galleryLeftToRight"
         self.mode = Mode(rawValue: modeString) ?? .galleryLeftToRight
-        self.isNightMode = settings["readerNightMode"].boolValue ?? false
-        self.preloadCount = settings["preloadImageCount"].intValue ?? 4
+        self.isNightMode = self.settingScope.effective("readerNightMode").boolValue ?? false
+        self.preloadCount = self.settingScope.effective("preloadImageCount").intValue ?? 4
+    }
+
+    /// 阅读设置作用域（漫画级 → 设备级 → 全局），供阅读器各视图读取生效值。
+    /// Sendable 且不可变，标记 nonisolated 供非隔离上下文（如静态翻页编排）安全读取。
+    nonisolated public let settingScope: ReaderSettingScope
+
+    /// 当前漫画的阅读设置生效值（对齐上游 reader.dart 的 getReaderSetting 读取）。
+    nonisolated public func setting(_ key: String) -> JSON {
+        settingScope.effective(key)
     }
 
     public func setChapters(_ chapters: ComicChapters?) {

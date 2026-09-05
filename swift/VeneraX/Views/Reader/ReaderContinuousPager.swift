@@ -67,7 +67,8 @@ struct ContinuousPager: View {
             } else {
                 TranslatedReaderPageView(
                     cacheKey: model.translationCacheKey(for: item),
-                    imageData: { await model.continuousImageData(for: item) }
+                    imageData: { await model.continuousImageData(for: item) },
+                    scope: model.settingScope
                 ) {
                     ContinuousPageView(model: model, item: item, onTapToolbar: onTapToolbar)
                 }

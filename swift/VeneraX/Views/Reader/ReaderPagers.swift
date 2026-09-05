@@ -12,7 +12,7 @@ struct GalleryPager: View {
     @State private var selectedSpread = 0
 
     private var isTwoPage: Bool {
-        AppData.shared.settings["readerTwoPageMode"].boolValue ?? false
+        model.setting("readerTwoPageMode").boolValue ?? false
     }
 
     var body: some View {
@@ -28,7 +28,8 @@ struct GalleryPager: View {
             ForEach(model.pages.indices, id: \.self) { index in
                 TranslatedReaderPageView(
                     cacheKey: model.translationCacheKey(for: index) ?? "page-\(index)",
-                    imageData: { await model.imageData(at: index) }
+                    imageData: { await model.imageData(at: index) },
+                    scope: model.settingScope
                 ) {
                     ReaderPageView(
                         model: model, index: index,
@@ -97,7 +98,8 @@ struct GalleryPager: View {
                     ForEach(indices, id: \.self) { pageIndex in
                         TranslatedReaderPageView(
                             cacheKey: model.translationCacheKey(for: pageIndex) ?? "page-\(pageIndex)",
-                            imageData: { await model.imageData(at: pageIndex) }
+                            imageData: { await model.imageData(at: pageIndex) },
+                            scope: model.settingScope
                         ) {
                             ReaderPageView(
                                 model: model, index: pageIndex,
@@ -162,7 +164,7 @@ struct GalleryPager: View {
     }
 
     private var showSingleImageOnFirstPage: Bool {
-        AppData.shared.settings["showSingleImageOnFirstPage"].boolValue ?? false
+        model.setting("showSingleImageOnFirstPage").boolValue ?? false
     }
 
     private func handleTwoPageSelection(

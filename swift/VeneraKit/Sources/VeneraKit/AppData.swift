@@ -98,6 +98,17 @@ public final class AppData: @unchecked Sendable {
             return self["deviceSpecificSettings"][deviceId]["enabled"].boolValue == true
         }
 
+        /// 设备级开关（懒创建 deviceId；对齐上游 deviceSpecificSettings[deviceId].enabled）。
+        public func setDeviceSpecificSettingsEnabled(_ enabled: Bool) {
+            let deviceId = enabled ? getOrCreateDeviceId() : (self["deviceId"].stringValue ?? "")
+            guard !deviceId.isEmpty else { return }
+            var all = self["deviceSpecificSettings"].objectValue ?? [:]
+            var deviceSettings = all[deviceId]?.objectValue ?? [:]
+            deviceSettings["enabled"] = .bool(enabled)
+            all[deviceId] = .object(deviceSettings)
+            self["deviceSpecificSettings"] = .object(all)
+        }
+
         public func getDeviceReaderSetting(key: String) -> JSON {
             guard isDeviceSpecificSettingsEnabled() else { return self[key] }
             let deviceId = self["deviceId"].stringValue ?? ""

@@ -11,16 +11,16 @@ import UIKit
 /// - 页末：自动切下一话（章节过渡屏 + 中触觉反馈），首页同理切上一话末页
 /// - 无相邻章节：到底提示
 enum ReaderPageTurning {
-    /// 是否启用翻页动画（原版设置键 enablePageAnimation）。
-    static var animationEnabled: Bool {
-        AppData.shared.settings["enablePageAnimation"].boolValue ?? true
+    /// 是否启用翻页动画（原版设置键 enablePageAnimation；走漫画级 → 设备级 → 全局生效链）。
+    static func animationEnabled(_ model: ReaderModel) -> Bool {
+        model.setting("enablePageAnimation").boolValue ?? true
     }
 
     /// 页内翻页（带动画与触觉）。
     @MainActor
     static func turn(_ model: ReaderModel, to index: Int) {
         guard model.pages.indices.contains(index) else { return }
-        let animated = animationEnabled
+        let animated = animationEnabled(model)
         if animated {
             withAnimation(.easeInOut(duration: 0.22)) {
                 model.setIndex(index)

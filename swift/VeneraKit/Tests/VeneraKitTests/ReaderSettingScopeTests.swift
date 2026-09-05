@@ -150,4 +150,46 @@ final class ReaderSettingScopeTests: XCTestCase {
         XCTAssertEqual(s.getDeviceReaderSetting(key: "readerMode").stringValue, "galleryLeftToRight")
         XCTAssertEqual(s["deviceId"].stringValue ?? "", id, "重置设置不得删除 deviceId 本身")
     }
+
+    // MARK: - ReaderSettingScope 写入路由
+
+    func testScopeWriteRoutesToComicScopeWhenEnabled() {
+        let s = AppData.shared.settings
+        s.setDeviceReaderSetting(key: "readerMode", value: .string("continuousTopToBottom"))
+        enableDevice()
+        enableComic()
+
+        let scope = ReaderSettingScope(comicId: "c1", sourceKey: "src")
+        XCTAssertTrue(scope.isComicEnabled)
+        scope.write("readerMode", value: .string("galleryTopToBottom"))
+
+        XCTAssertEqual(s.getReaderSetting(comicId: "c1", sourceKey: "src", key: "readerMode").stringValue, "galleryTopToBottom")
+        // 设备级值不受漫画作用域写入影响
+        XCTAssertEqual(s.getDeviceReaderSetting(key: "readerMode").stringValue, "continuousTopToBottom")
+    }
+
+    func testScopeWriteFallsBackToGlobalWhenNoScopeEnabled() {
+        let s = AppData.shared.settings
+        let scope = ReaderSettingScope(comicId: "c1", sourceKey: "src")
+        XCTAssertFalse(scope.isComicEnabled)
+        XCTAssertFalse(scope.isDeviceEnabled)
+
+        scope.write("readerMode", value: .string("galleryTopToBottom"))
+
+        XCTAssertEqual(s["readerMode"].stringValue, "galleryTopToBottom", "无任何作用域开启时应写全局")
+        XCTAssertEqual(scope.effective("readerMode").stringValue, "galleryTopToBottom")
+    }
+
+    func testScopeWithoutComicContextUsesDeviceChain() {
+        let s = AppData.shared.settings
+        s.setDeviceReaderSetting(key: "readerMode", value: .string("continuousTopToBottom"))
+        enableDevice()
+
+        let scope = ReaderSettingScope()
+        XCTAssertFalse(scope.hasComicContext)
+        XCTAssertEqual(scope.effective("readerMode").stringValue, "continuousTopToBottom")
+
+        scope.write("readerMode", value: .string("galleryTopToBottom"))
+        XCTAssertEqual(s.getDeviceReaderSetting(key: "readerMode").stringValue, "galleryTopToBottom", "设备开关开启时无上下文写入应落设备级")
+    }
 }

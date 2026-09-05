@@ -1,15 +1,25 @@
 import SwiftUI
 import VeneraKit
 
-/// 「Reading settings」分区（对齐 settings/reader.dart 的全局 scope；
-/// AI 翻译组按里程碑延后，每部漫画/设备独立设置入口在阅读器内提供）。
+/// 「Reading settings」分区（对齐 settings/reader.dart）。
+/// 默认全局作用域（设置页）；从阅读器以漫画上下文打开时提供
+/// 「每部漫画独立设置」开关，行读写经 ReaderSettingScope 按上游语义分流：
+/// 生效值 = 漫画级 → 设备级 → 全局；写入 = 漫画开 → 漫画级，设备开 → 设备级，否则全局。
+/// AI 翻译组按里程碑延后（界面在位，功能走 M7）。
 struct ReaderSettingsSection: View {
-    @State private var readerMode = AppData.shared.settings["readerMode"].stringValue ?? "galleryLeftToRight"
-    @State private var tapTurnForward = !(AppData.shared.settings["enableTapToTurnPages"].boolValue ?? true == false)
+    var scope: ReaderSettingScope = .global
+
+    @State private var readerMode: String
     @State private var refreshID = UUID()
+
+    init(scope: ReaderSettingScope = .global) {
+        self.scope = scope
+        _readerMode = State(initialValue: scope.effective("readerMode").stringValue ?? "galleryLeftToRight")
+    }
 
     var body: some View {
         Form {
+            scopeGroup
             readingGroup
             gestureGroup
             favoritesGroup
@@ -21,6 +31,73 @@ struct ReaderSettingsSection: View {
         .id(refreshID)
     }
 
+    private func refresh() {
+        refreshID = UUID()
+    }
+
+    /// 作用域开关区：漫画上下文显示「每部漫画独立设置」，全局页显示「设备独立设置」。
+    @ViewBuilder
+    private var scopeGroup: some View {
+        Section {
+            if scope.hasComicContext {
+                Toggle(isOn: Binding(
+                    get: { scope.isComicEnabled },
+                    set: {
+                        AppData.shared.settings.setComicSpecificSettingsEnabled(
+                            comicId: scope.comicId ?? "",
+                            sourceKey: scope.sourceKey ?? "",
+                            enabled: $0
+                        )
+                        AppData.shared.saveData()
+                        refresh()
+                    }
+                )) {
+                    Text("Enable comic specific settings".tl)
+                    Text("Overrides global reading settings for this comic only".tl)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if scope.isComicEnabled {
+                    SettingActionRow(
+                        title: "Reset comic reading settings".tl,
+                        actionTitle: "Reset".tl
+                    ) {
+                        AppData.shared.settings.resetComicReaderSettings(
+                            comicId: scope.comicId ?? "",
+                            sourceKey: scope.sourceKey ?? ""
+                        )
+                        AppData.shared.saveData()
+                        refresh()
+                    }
+                }
+            } else {
+                Toggle(isOn: Binding(
+                    get: { scope.isDeviceEnabled },
+                    set: {
+                        AppData.shared.settings.setDeviceSpecificSettingsEnabled($0)
+                        AppData.shared.saveData()
+                        refresh()
+                    }
+                )) {
+                    Text("Use device-specific settings".tl)
+                    Text("Edits below are stored for this device only".tl)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if scope.isDeviceEnabled {
+                    SettingActionRow(
+                        title: "Reset device reading settings".tl,
+                        actionTitle: "Reset".tl
+                    ) {
+                        AppData.shared.settings.resetDeviceReaderSettings()
+                        AppData.shared.saveData()
+                        refresh()
+                    }
+                }
+            }
+        }
+    }
+
     private var isGalleryMode: Bool { readerMode.hasPrefix("gallery") }
     private var isContinuousMode: Bool { readerMode.hasPrefix("continuous") }
 
@@ -29,19 +106,19 @@ struct ReaderSettingsSection: View {
     @ViewBuilder
     private var readingGroup: some View {
         Section("Reading settings".tl) {
-            SettingToggleRow(title: "Page animation".tl, key: "enablePageAnimation", defaultValue: true)
+            SettingToggleRow(title: "Page animation".tl, key: "enablePageAnimation", defaultValue: true, scope: scope)
             Picker("Reading mode".tl, selection: Binding(
                 get: { readerMode },
                 set: {
-                    readerMode = $0
-                    AppData.shared.settings["readerMode"] = .string($0)
+                    scope.write("readerMode", value: .string($0))
                     AppData.shared.saveData()
                     if $0.hasPrefix("continuous") {
-                        // 连续模式单屏单页（对齐原版联动）。
+                        // 连续模式单屏单页（对齐原版联动：写全局键）。
                         AppData.shared.settings["readerScreenPicNumberForLandscape"] = .int(1)
                         AppData.shared.settings["readerScreenPicNumberForPortrait"] = .int(1)
                         AppData.shared.saveData()
                     }
+                    readerMode = $0
                 }
             )) {
                 Text("Gallery (Left to Right)".tl).tag("galleryLeftToRight")
@@ -55,47 +132,54 @@ struct ReaderSettingsSection: View {
                 title: "Seamless chapter reading".tl,
                 key: "enableContinuousChapterReading",
                 subtitle: "Join chapters in continuous reading modes".tl,
-                defaultValue: true
+                defaultValue: true,
+                scope: scope
             )
             if isGalleryMode {
                 SettingSliderRow(
                     title: "The number of pic in screen for landscape (Only Gallery Mode)".tl,
                     key: "readerScreenPicNumberForLandscape",
-                    min: 1, max: 5, step: 1, defaultValue: 1
+                    min: 1, max: 5, step: 1, defaultValue: 1,
+                    scope: scope
                 )
                 SettingSliderRow(
                     title: "The number of pic in screen for portrait (Only Gallery Mode)".tl,
                     key: "readerScreenPicNumberForPortrait",
-                    min: 1, max: 5, step: 1, defaultValue: 1
+                    min: 1, max: 5, step: 1, defaultValue: 1,
+                    scope: scope
                 )
             }
             if isGalleryMode {
-                let landscape = AppData.shared.settings["readerScreenPicNumberForLandscape"].intValue ?? 1
-                let portrait = AppData.shared.settings["readerScreenPicNumberForPortrait"].intValue ?? 1
+                let landscape = scope.effective("readerScreenPicNumberForLandscape").intValue ?? 1
+                let portrait = scope.effective("readerScreenPicNumberForPortrait").intValue ?? 1
                 if landscape > 1 || portrait > 1 {
                     SettingToggleRow(
                         title: "Show single image on first page".tl,
                         key: "showSingleImageOnFirstPage",
-                        defaultValue: false
+                        defaultValue: false,
+                        scope: scope
                     )
                 }
                 SettingToggleRow(
                     title: "Fill screen".tl,
                     key: "galleryFillScreen",
                     subtitle: "Crop image to fill screen instead of letterboxing".tl,
-                    defaultValue: false
+                    defaultValue: false,
+                    scope: scope
                 )
             }
             SettingSliderRow(
                 title: "Auto page turning interval".tl,
                 key: "autoPageTurningInterval",
-                min: 1, max: 20, step: 1, defaultValue: 5
+                min: 1, max: 20, step: 1, defaultValue: 5,
+                scope: scope
             )
             if isContinuousMode {
                 SettingSliderRow(
                     title: "Mouse scroll speed".tl,
                     key: "readerScrollSpeed",
-                    min: 0.5, max: 3, step: 0.1, defaultValue: 1
+                    min: 0.5, max: 3, step: 0.1, defaultValue: 1,
+                    scope: scope
                 )
             }
             if readerMode == "continuousTopToBottom" {
@@ -103,25 +187,29 @@ struct ReaderSettingsSection: View {
                     title: "Center page after turning".tl,
                     key: "readerCenterPageOnTurn",
                     subtitle: "Center a short page vertically instead of pinning it to the top".tl,
-                    defaultValue: false
+                    defaultValue: false,
+                    scope: scope
                 )
             }
             if isContinuousMode {
                 SettingSliderRow(
                     title: "Spacing between pages".tl,
                     key: "readerPageSpacing",
-                    min: 0, max: 50, step: 2, defaultValue: 0
+                    min: 0, max: 50, step: 2, defaultValue: 0,
+                    scope: scope
                 )
             }
             SettingToggleRow(
                 title: "Remove from read later when reading starts".tl,
                 key: "autoRemoveFromReadLater",
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
             SettingSliderRow(
                 title: "Number of images preloaded".tl,
                 key: "preloadImageCount",
-                min: 1, max: 16, step: 1, defaultValue: 4
+                min: 1, max: 16, step: 1, defaultValue: 4,
+                scope: scope
             )
         }
     }
@@ -134,13 +222,13 @@ struct ReaderSettingsSection: View {
             // 点区翻页三态（对齐 _PageTurnModeSetting：off/forward/reverse）。
             Picker("Tap to turn pages".tl, selection: Binding(
                 get: {
-                    let enabled = AppData.shared.settings["enableTapToTurnPages"].boolValue ?? true
-                    let reverse = AppData.shared.settings["reverseTapToTurnPages"].boolValue ?? false
+                    let enabled = scope.effective("enableTapToTurnPages").boolValue ?? true
+                    let reverse = scope.effective("reverseTapToTurnPages").boolValue ?? false
                     return !enabled ? "off" : (reverse ? "reverse" : "forward")
                 },
                 set: { newValue in
-                    AppData.shared.settings["enableTapToTurnPages"] = .bool(newValue != "off")
-                    AppData.shared.settings["reverseTapToTurnPages"] = .bool(newValue == "reverse")
+                    scope.write("enableTapToTurnPages", value: .bool(newValue != "off"))
+                    scope.write("reverseTapToTurnPages", value: .bool(newValue == "reverse"))
                     AppData.shared.saveData()
                 }
             )) {
@@ -151,14 +239,16 @@ struct ReaderSettingsSection: View {
             SettingToggleRow(
                 title: "Double tap to zoom".tl,
                 key: "enableDoubleTapToZoom",
-                defaultValue: true
+                defaultValue: true,
+                scope: scope
             )
             SettingToggleRow(
                 title: "Long press to zoom".tl,
                 key: "enableLongPressToZoom",
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
-            if AppData.shared.settings["enableLongPressToZoom"].boolValue ?? false {
+            if scope.effective("enableLongPressToZoom").boolValue ?? false {
                 SettingPickerRow(
                     title: "Long press zoom position".tl,
                     key: "longPressZoomPosition",
@@ -166,17 +256,19 @@ struct ReaderSettingsSection: View {
                         .init(value: "press", label: "Press position".tl),
                         .init(value: "center", label: "Screen center".tl),
                     ],
-                    defaultValue: "press"
+                    defaultValue: "press",
+                    scope: scope
                 )
             }
-            if AppData.shared.settings["enableTapToTurnPages"].boolValue ?? true {
+            if scope.effective("enableTapToTurnPages").boolValue ?? true {
                 SettingToggleRow(
                     title: "Custom tap-to-turn zones".tl,
                     key: "enableCustomTapZones",
                     subtitle: "Choose what tapping each screen edge does".tl,
-                    defaultValue: false
+                    defaultValue: false,
+                    scope: scope
                 )
-                if AppData.shared.settings["enableCustomTapZones"].boolValue ?? false {
+                if scope.effective("enableCustomTapZones").boolValue ?? false {
                     tapZonePicker("Top edge tap".tl, key: "tapZoneTop", defaultValue: "prev")
                     tapZonePicker("Bottom edge tap".tl, key: "tapZoneBottom", defaultValue: "next")
                     tapZonePicker("Left edge tap".tl, key: "tapZoneLeft", defaultValue: "none")
@@ -195,7 +287,8 @@ struct ReaderSettingsSection: View {
                 .init(value: "next", label: "Next page".tl),
                 .init(value: "none", label: "No action".tl),
             ],
-            defaultValue: defaultValue
+            defaultValue: defaultValue,
+            scope: scope
         )
     }
 
@@ -206,7 +299,8 @@ struct ReaderSettingsSection: View {
             SettingToggleRow(
                 title: "Also collect chapter cover when collecting image".tl,
                 key: "autoFavoriteCover",
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
             SettingPickerRow(
                 title: "Quick collect image".tl,
@@ -217,7 +311,8 @@ struct ReaderSettingsSection: View {
                     .init(value: "Swipe", label: "Swipe".tl),
                 ],
                 defaultValue: "No",
-                help: "On the image browsing page, you can quickly collect images by sliding horizontally or vertically according to your reading mode".tl
+                help: "On the image browsing page, you can quickly collect images by sliding horizontally or vertically according to your reading mode".tl,
+                scope: scope
             )
         }
     }
@@ -228,11 +323,11 @@ struct ReaderSettingsSection: View {
     private var imageProcessingGroup: some View {
         Section("Image processing / enhancement".tl) {
             Toggle(isOn: Binding(
-                get: { AppData.shared.settings["limitImageWidth"].boolValue ?? false },
+                get: { scope.effective("limitImageWidth").boolValue ?? false },
                 set: {
-                    AppData.shared.settings["limitImageWidth"] = .bool($0)
+                    scope.write("limitImageWidth", value: .bool($0))
                     AppData.shared.saveData()
-                    refreshID = UUID()
+                    refresh()
                 }
             )) {
                 Text("Limit image width".tl)
@@ -240,43 +335,49 @@ struct ReaderSettingsSection: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if AppData.shared.settings["limitImageWidth"].boolValue ?? false {
+            if scope.effective("limitImageWidth").boolValue ?? false {
                 SettingSliderRow(
                     title: "Image width (% of screen height)".tl,
                     key: "imageWidthPercent",
-                    min: 40, max: 150, step: 5, defaultValue: 70
+                    min: 40, max: 150, step: 5, defaultValue: 70,
+                    scope: scope
                 )
             }
             SettingToggleRow(
                 title: "Image enhancement".tl,
                 key: "enableReaderImageEnhance",
                 subtitle: "Sharpen blurry images at render time without extra loading or battery cost".tl,
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
-            if AppData.shared.settings["enableReaderImageEnhance"].boolValue ?? false {
+            if scope.effective("enableReaderImageEnhance").boolValue ?? false {
                 SettingSliderRow(
                     title: "Sharpen strength".tl,
                     key: "readerImageEnhanceStrength",
                     min: 0, max: 10, step: 0.1, defaultValue: 0.5,
-                    format: { String(format: "%.1f", $0) }
+                    format: { String(format: "%.1f", $0) },
+                    scope: scope
                 )
                 SettingSliderRow(
                     title: "Clarity".tl,
                     key: "readerImageEnhanceClarity",
                     min: 0, max: 1, step: 0.1, defaultValue: 0,
-                    format: { String(format: "%.1f", $0) }
+                    format: { String(format: "%.1f", $0) },
+                    scope: scope
                 )
                 SettingSliderRow(
                     title: "Contrast".tl,
                     key: "readerImageEnhanceContrast",
                     min: 0, max: 1, step: 0.1, defaultValue: 0,
-                    format: { String(format: "%.1f", $0) }
+                    format: { String(format: "%.1f", $0) },
+                    scope: scope
                 )
                 SettingSliderRow(
                     title: "Color vibrance".tl,
                     key: "readerImageEnhanceVibrance",
                     min: 0, max: 1, step: 0.1, defaultValue: 0,
-                    format: { String(format: "%.1f", $0) }
+                    format: { String(format: "%.1f", $0) },
+                    scope: scope
                 )
             }
         }
@@ -289,9 +390,10 @@ struct ReaderSettingsSection: View {
                     title: "Translate comic images".tl,
                     key: "enableImageTranslation",
                     subtitle: "Recognize text with Apple Vision and show translated overlays in the reader".tl,
-                    defaultValue: false
+                    defaultValue: false,
+                    scope: scope
                 )
-                if AppData.shared.settings["enableImageTranslation"].boolValue ?? false {
+                if scope.effective("enableImageTranslation").boolValue ?? false {
                     SettingPickerRow(
                         title: "Source language".tl,
                         key: "imageTranslationSource",
@@ -302,7 +404,8 @@ struct ReaderSettingsSection: View {
                             .init(value: "en", label: "English".tl),
                             .init(value: "ko", label: "Korean".tl)
                         ],
-                        defaultValue: "auto"
+                        defaultValue: "auto",
+                        scope: scope
                     )
                     SettingPickerRow(
                         title: "Target language".tl,
@@ -313,13 +416,14 @@ struct ReaderSettingsSection: View {
                             .init(value: "en", label: "English".tl),
                             .init(value: "ja", label: "Japanese".tl)
                         ],
-                        defaultValue: "zh"
+                        defaultValue: "zh",
+                        scope: scope
                     )
-                    TextField("OpenAI-compatible provider URL".tl, text: SettingsBinding.string("imageTranslationLlmUrl"))
+                    TextField("OpenAI-compatible provider URL".tl, text: SettingsBinding.string("imageTranslationLlmUrl", scope: scope))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    SecureField("Provider API key (optional)".tl, text: SettingsBinding.string("imageTranslationLlmKey"))
-                    TextField("Provider model (optional)".tl, text: SettingsBinding.string("imageTranslationLlmModel"))
+                    SecureField("Provider API key (optional)".tl, text: SettingsBinding.string("imageTranslationLlmKey", scope: scope))
+                    TextField("Provider model (optional)".tl, text: SettingsBinding.string("imageTranslationLlmModel", scope: scope))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Text("Leave provider URL empty to use the built-in public translation provider. Inpainting is not part of this native MVP; the original image remains visible with translated overlays.".tl)
@@ -345,22 +449,25 @@ struct ReaderSettingsSection: View {
                     .init(value: "sepia", label: "Sepia".tl),
                     .init(value: "green", label: "Eye-care green".tl),
                 ],
-                defaultValue: "system"
+                defaultValue: "system",
+                scope: scope
             )
             SettingToggleRow(
                 title: "Night mode".tl,
                 key: "readerNightMode",
                 subtitle: "Dim the page with a warm overlay to reduce eye strain".tl,
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
             SettingToggleRow(
                 title: "Follow system dark mode".tl,
                 key: "readerNightModeFollowSystem",
                 subtitle: "Turn night mode on/off automatically with the system theme".tl,
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
-            let nightActive = (AppData.shared.settings["readerNightMode"].boolValue ?? false)
-                || (AppData.shared.settings["readerNightModeFollowSystem"].boolValue ?? false)
+            let nightActive = (scope.effective("readerNightMode").boolValue ?? false)
+                || (scope.effective("readerNightModeFollowSystem").boolValue ?? false)
             if nightActive {
                 SettingPickerRow(
                     title: "Night mode color".tl,
@@ -370,40 +477,45 @@ struct ReaderSettingsSection: View {
                         .init(value: "black", label: "Black".tl),
                         .init(value: "red", label: "Dim red".tl),
                     ],
-                    defaultValue: "warm"
+                    defaultValue: "warm",
+                    scope: scope
                 )
                 SettingSliderRow(
                     title: "Night mode intensity".tl,
                     key: "readerNightModeIntensity",
                     min: 0.1, max: 0.85, step: 0.05, defaultValue: 0.45,
-                    format: { String(format: "%.2f", $0) }
+                    format: { String(format: "%.2f", $0) },
+                    scope: scope
                 )
             }
             SettingToggleRow(
                 title: "Display time & battery info in reader".tl,
                 key: "enableClockAndBatteryInfoInReader",
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
             SettingToggleRow(
                 title: "Show system status bar".tl,
                 key: "showSystemStatusBar",
-                defaultValue: false
+                defaultValue: false,
+                scope: scope
             )
             SettingToggleRow(
                 title: "Show Page Number".tl,
                 key: "showPageNumberInReader",
-                defaultValue: true
+                defaultValue: true,
+                scope: scope
             )
             Toggle(isOn: Binding(
-                get: { AppData.shared.settings["showChapterComments"].boolValue ?? false },
+                get: { scope.effective("showChapterComments").boolValue ?? false },
                 set: {
-                    AppData.shared.settings["showChapterComments"] = .bool($0)
+                    scope.write("showChapterComments", value: .bool($0))
                     if !$0 {
                         // 关闭章节评论时联动关闭「章末评论」（对齐原版）。
-                        AppData.shared.settings["showChapterCommentsAtEnd"] = .bool(false)
+                        scope.write("showChapterCommentsAtEnd", value: .bool(false))
                     }
                     AppData.shared.saveData()
-                    refreshID = UUID()
+                    refresh()
                 }
             )) {
                 Text("Show Chapter Comments".tl)
@@ -411,13 +523,15 @@ struct ReaderSettingsSection: View {
             SettingSliderRow(
                 title: "Comment font size".tl,
                 key: "commentsFontSize",
-                min: 12, max: 24, step: 1, defaultValue: 14
+                min: 12, max: 24, step: 1, defaultValue: 14,
+                scope: scope
             )
-            if isGalleryMode, AppData.shared.settings["showChapterComments"].boolValue ?? false {
+            if isGalleryMode, scope.effective("showChapterComments").boolValue ?? false {
                 SettingToggleRow(
                     title: "Show Comments at Chapter End".tl,
                     key: "showChapterCommentsAtEnd",
-                    defaultValue: false
+                    defaultValue: false,
+                    scope: scope
                 )
             }
         }

@@ -3,42 +3,59 @@ import VeneraKit
 
 /// 设置项与 AppData 的绑定工具：读取当前值，写入后立即 saveData（对齐
 /// 原版 SelectSetting/SwitchSetting 的即时落盘行为）。
+/// 传入 scope 时走阅读设置作用域（漫画级 → 设备级 → 全局）。
 enum SettingsBinding {
-    static func bool(_ key: String, default def: Bool = false) -> Binding<Bool> {
+    static func bool(_ key: String, default def: Bool = false, scope: ReaderSettingScope? = nil) -> Binding<Bool> {
         Binding(
-            get: { AppData.shared.settings[key].boolValue ?? def },
+            get: { (scope?.effective(key) ?? AppData.shared.settings[key]).boolValue ?? def },
             set: {
-                AppData.shared.settings[key] = .bool($0)
+                if let scope {
+                    scope.write(key, value: .bool($0))
+                } else {
+                    AppData.shared.settings[key] = .bool($0)
+                }
                 AppData.shared.saveData()
             }
         )
     }
 
-    static func string(_ key: String, default def: String = "") -> Binding<String> {
+    static func string(_ key: String, default def: String = "", scope: ReaderSettingScope? = nil) -> Binding<String> {
         Binding(
-            get: { AppData.shared.settings[key].stringValue ?? def },
+            get: { (scope?.effective(key) ?? AppData.shared.settings[key]).stringValue ?? def },
             set: {
-                AppData.shared.settings[key] = .string($0)
+                if let scope {
+                    scope.write(key, value: .string($0))
+                } else {
+                    AppData.shared.settings[key] = .string($0)
+                }
                 AppData.shared.saveData()
             }
         )
     }
 
-    static func double(_ key: String, default def: Double = 0) -> Binding<Double> {
+    static func double(_ key: String, default def: Double = 0, scope: ReaderSettingScope? = nil) -> Binding<Double> {
         Binding(
-            get: { AppData.shared.settings[key].doubleValue ?? def },
+            get: { (scope?.effective(key) ?? AppData.shared.settings[key]).doubleValue ?? def },
             set: {
-                AppData.shared.settings[key] = .double($0)
+                if let scope {
+                    scope.write(key, value: .double($0))
+                } else {
+                    AppData.shared.settings[key] = .double($0)
+                }
                 AppData.shared.saveData()
             }
         )
     }
 
-    static func int(_ key: String, default def: Int = 0) -> Binding<Int> {
+    static func int(_ key: String, default def: Int = 0, scope: ReaderSettingScope? = nil) -> Binding<Int> {
         Binding(
-            get: { AppData.shared.settings[key].intValue ?? def },
+            get: { (scope?.effective(key) ?? AppData.shared.settings[key]).intValue ?? def },
             set: {
-                AppData.shared.settings[key] = .int($0)
+                if let scope {
+                    scope.write(key, value: .int($0))
+                } else {
+                    AppData.shared.settings[key] = .int($0)
+                }
                 AppData.shared.saveData()
             }
         )
@@ -59,21 +76,31 @@ struct SettingPickerRow: View {
     let options: [SettingOption]
     var defaultValue: String?
     var help: String?
+    var scope: ReaderSettingScope?
     @State private var selection: String
+
+    private var currentValue: String {
+        (scope?.effective(key) ?? AppData.shared.settings[key]).stringValue
+            ?? defaultValue ?? options.first?.value ?? ""
+    }
 
     init(
         title: String,
         key: String,
         options: [SettingOption],
         defaultValue: String? = nil,
-        help: String? = nil
+        help: String? = nil,
+        scope: ReaderSettingScope? = nil
     ) {
         self.title = title
         self.key = key
         self.options = options
         self.defaultValue = defaultValue
         self.help = help
-        _selection = State(initialValue: AppData.shared.settings[key].stringValue ?? defaultValue ?? options.first?.value ?? "")
+        self.scope = scope
+        let initial = (scope?.effective(key) ?? AppData.shared.settings[key]).stringValue
+            ?? defaultValue ?? options.first?.value ?? ""
+        _selection = State(initialValue: initial)
     }
 
     var body: some View {
@@ -83,11 +110,15 @@ struct SettingPickerRow: View {
             }
         }
         .onChange(of: selection) { _, newValue in
-            AppData.shared.settings[key] = .string(newValue)
+            if let scope {
+                scope.write(key, value: .string(newValue))
+            } else {
+                AppData.shared.settings[key] = .string(newValue)
+            }
             AppData.shared.saveData()
         }
         .onAppear {
-            selection = AppData.shared.settings[key].stringValue ?? defaultValue ?? options.first?.value ?? ""
+            selection = currentValue
         }
         if let help {
             Text(verbatim: help)
@@ -103,13 +134,18 @@ struct SettingToggleRow: View {
     let key: String
     var subtitle: String?
     var defaultValue = false
+    var scope: ReaderSettingScope?
     var onChange: ((Bool) -> Void)?
 
     var body: some View {
         Toggle(isOn: Binding(
-            get: { AppData.shared.settings[key].boolValue ?? defaultValue },
+            get: { (scope?.effective(key) ?? AppData.shared.settings[key]).boolValue ?? defaultValue },
             set: {
-                AppData.shared.settings[key] = .bool($0)
+                if let scope {
+                    scope.write(key, value: .bool($0))
+                } else {
+                    AppData.shared.settings[key] = .bool($0)
+                }
                 AppData.shared.saveData()
                 onChange?($0)
             }
@@ -139,7 +175,8 @@ struct SettingSliderRow: View {
         title: String, key: String,
         min minValue: Double, max maxValue: Double, step: Double,
         defaultValue: Double,
-        format: @escaping (Double) -> String = { String(format: "%.0f", $0) }
+        format: @escaping (Double) -> String = { String(format: "%.0f", $0) },
+        scope: ReaderSettingScope? = nil
     ) {
         self.title = title
         self.key = key
@@ -147,10 +184,13 @@ struct SettingSliderRow: View {
         self.step = step
         self.defaultValue = defaultValue
         self.format = format
+        self.scope = scope
     }
 
+    var scope: ReaderSettingScope?
+
     var body: some View {
-        let binding = SettingsBinding.double(key, default: defaultValue)
+        let binding = SettingsBinding.double(key, default: defaultValue, scope: scope)
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)

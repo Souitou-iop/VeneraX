@@ -8,14 +8,21 @@ import VeneraKit
 struct TranslatedReaderPageView<Content: View>: View {
     let cacheKey: String
     let imageData: () async -> Data?
+    var scope: ReaderSettingScope = .global
     @ViewBuilder let content: () -> Content
 
     @State private var result: ImageTranslationResult?
     @State private var failed = false
 
-    init(cacheKey: String, imageData: @escaping () async -> Data?, @ViewBuilder content: @escaping () -> Content) {
+    init(
+        cacheKey: String,
+        imageData: @escaping () async -> Data?,
+        scope: ReaderSettingScope = .global,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
         self.cacheKey = cacheKey
         self.imageData = imageData
+        self.scope = scope
         self.content = content
     }
 
@@ -60,7 +67,7 @@ struct TranslatedReaderPageView<Content: View>: View {
             }
         }
         .task(id: cacheKey) {
-            guard AppData.shared.settings["enableImageTranslation"].boolValue ?? false else {
+            guard scope.effective("enableImageTranslation").boolValue ?? false else {
                 result = nil
                 failed = false
                 return
@@ -70,8 +77,8 @@ struct TranslatedReaderPageView<Content: View>: View {
                 result = try await ImageTranslationService.shared.translate(
                     imageData: data,
                     cacheKey: cacheKey,
-                    sourceLanguage: AppData.shared.settings["imageTranslationSource"].stringValue ?? "auto",
-                    targetLanguage: AppData.shared.settings["imageTranslationTarget"].stringValue ?? "zh"
+                    sourceLanguage: scope.effective("imageTranslationSource").stringValue ?? "auto",
+                    targetLanguage: scope.effective("imageTranslationTarget").stringValue ?? "zh"
                 )
                 failed = false
             } catch {

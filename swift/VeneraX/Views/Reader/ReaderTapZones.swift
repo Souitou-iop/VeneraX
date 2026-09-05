@@ -27,7 +27,7 @@ struct ReaderTapZones: ViewModifier {
 
     /// UIKit 层点击入口：xRatio 为归一化横向位置。
     func handleTap(xRatio: CGFloat) {
-        let enableTapTurn = AppData.shared.settings["enableTapToTurnPages"].boolValue ?? true
+        let enableTapTurn = model.setting("enableTapToTurnPages").boolValue ?? true
         if !enableTapTurn {
             onTapToolbar()
             return
@@ -41,7 +41,7 @@ struct ReaderTapZones: ViewModifier {
             onTapToolbar()
             return
         }
-        if AppData.shared.settings["reverseTapToTurnPages"].boolValue ?? false {
+        if model.setting("reverseTapToTurnPages").boolValue ?? false {
             turnNext.toggle()
         }
         Task { @MainActor in

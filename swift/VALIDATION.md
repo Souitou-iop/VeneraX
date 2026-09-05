@@ -312,3 +312,27 @@ xcodebuild -scheme VeneraX -sdk iphonesimulator -derivedDataPath .../VeneraX-par
 
 - 本切片仅存储层 + 单测；UI（阅读器内「每部漫画独立设置」入口、设置页按生效模式门控 = 上游 ae214a7b 的完整对齐）为下一步工作，当前无调用方、不影响既有行为。
 - 上游 v2.3.2 仅 linked entries 改名重构，无可移植行为修复。
+
+## 2026-09-06：阅读设置作用域 UI 闭环（feature/reader-setting-scopes Phase 2）
+
+### 变更范围
+
+- 新增 `VeneraKit/Model/ReaderSettingScope.swift`：读写路由结构体（Sendable）。读取一律走生效链（漫画级 → 设备级 → 全局）；写入按 漫画开 → 漫画级、设备开 → 设备级、否则全局 分流（对齐上游 reader.dart 行级行为）。
+- `AppData.SettingsProxy` 新增 `setDeviceSpecificSettingsEnabled`（懒创建 deviceId，写入 enabled 标志）。
+- `SettingsComponents`：`SettingsBinding.bool/string/double/int` 与 Toggle/Picker/Slider 三类行组件加可选 `scope` 参数（默认 nil，既有调用方行为不变）。
+- `ReaderSettingsSection` 作用域化：全部行读写经 scope；新增作用域开关区——漫画上下文显示「启用此漫画特定设置」+「重置此漫画阅读设置」，全局页显示「使用设备独立设置」+「重置设备阅读设置」；画廊/连续专属设置的门控改为按**生效模式**判断（完整对齐上游 ae214a7b）；切连续模式联动写全局单屏页数（对齐上游同款行为）。
+- 阅读器接入：工具栏菜单新增「阅读设置」入口，以漫画上下文打开 sheet；`ReaderModel` 暴露 `settingScope`（nonisolated，Sendable）与 `setting(_:)`；阅读器全部行为设置读取（模式已先行）改为生效链——夜模式/预载数（ReaderModel）、点区翻页与反转（ReaderTapZones）、双页与单首页（ReaderPagers）、翻页动画（ReaderPageTurning）、图片翻译开关与语言（ReaderTranslationOverlay）、背景色/页码/章末评论/自动翻页间隔（ReaderView）；sheet 关闭时把生效模式与夜模式同步回模型。
+- 本地化：zh_CN/zh_TW 新增 5 键（「启用此漫画特定设置」上游键已存在，复用）。
+
+### 验证结果
+
+```text
+VeneraKit: 173 tests, 0 failures, 1 skipped（ReaderSettingScopeTests 增至 12 项：生效链全路径、enabled 门控、deviceId 懒创建且稳定、多漫画写入互不覆盖、两类 reset、作用域写入路由 3 项）
+xcodebuild -scheme VeneraX -sdk iphonesimulator -derivedDataPath .../VeneraX-parallel → BUILD SUCCEEDED
+```
+
+### 边界说明
+
+- `readerScreenPicNumber*` / `galleryFillScreen` / `readerScrollSpeed` / `readerPageSpacing` / `readerCenterPageOnTurn` / `enableContinuousChapterReading` 经查证为 Swift 阅读器**未消费的死设置**（阅读器从未读取，画廊多页布局未实现）——既有缺口，本轮仅保证其作用域写入正确，功能补全另行立项。
+- 阅读器菜单里的日/夜快捷切换仍写全局键（对齐上游 scaffold 快捷行为）；漫画级修改经设置 sheet 生效。
+- UI 交互走查（漫画开关切换的行刷新、sheet 关闭后模式同步）留待模拟器空闲时验证。

@@ -15,6 +15,7 @@ struct ReaderView: View {
     @State private var isOnChapterCommentsPage = false
     @State private var showPageJumpDialog = false
     @State private var pageJumpInput = ""
+    @State private var showReadingSettings = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var isVisible = false
@@ -81,7 +82,7 @@ struct ReaderView: View {
         }
         .task(id: isAutoPageTurning) {
             guard isAutoPageTurning, scenePhase == .active else { return }
-            let seconds = max(1, AppData.shared.settings["autoPageTurningInterval"].intValue ?? 5)
+            let seconds = max(1, model.setting("autoPageTurningInterval").intValue ?? 5)
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(seconds))
                 guard !Task.isCancelled, scenePhase == .active, isVisible else { return }
@@ -144,14 +145,30 @@ struct ReaderView: View {
         } message: {
             Text(verbatim: "\("Total pages".tl): \(model.totalPages) (1-\(model.totalPages))")
         }
+        // 每部漫画独立阅读设置（对齐上游 reader.dart 的漫画上下文入口）。
+        .sheet(isPresented: $showReadingSettings, onDismiss: {
+            // 关闭后把生效值同步回模型（mode/isNightMode 是 init 时快照的）。
+            let modeString = model.setting("readerMode").stringValue ?? "galleryLeftToRight"
+            model.mode = ReaderModel.Mode(rawValue: modeString) ?? model.mode
+            model.isNightMode = model.setting("readerNightMode").boolValue ?? model.isNightMode
+        }) {
+            NavigationStack {
+                ReaderSettingsSection(scope: model.settingScope)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done".tl) { showReadingSettings = false }
+                        }
+                    }
+            }
+        }
     }
 
     /// Flutter 版在画廊末尾插入章节评论页；仅在源、设置和章节 ID 都可用时加入。
     /// 双页模式也作为独立的末尾页插入，而不是伪装成一个双页 spread。
     private var chapterCommentsPage: AnyView? {
         guard !model.mode.isContinuous,
-              AppData.shared.settings["showChapterComments"].boolValue ?? false,
-              AppData.shared.settings["showChapterCommentsAtEnd"].boolValue ?? false,
+              model.setting("showChapterComments").boolValue ?? false,
+              model.setting("showChapterCommentsAtEnd").boolValue ?? false,
               let source = model.source,
               source.chapterCommentsAvailable,
               model.chapterIds.indices.contains(model.currentEpIndex) else { return nil }
@@ -168,7 +185,7 @@ struct ReaderView: View {
 
     private var readerBackground: Color {
         if model.isNightMode { return .black }
-        switch AppData.shared.settings["readerBackgroundColor"].stringValue ?? "system" {
+        switch model.setting("readerBackgroundColor").stringValue ?? "system" {
         case "white": return .white
         case "gray": return Color(white: 0.85)
         case "black": return .black
@@ -202,7 +219,7 @@ struct ReaderView: View {
             }
             if !isOnChapterCommentsPage {
                 if model.isNightMode {
-                    NightModeOverlay()
+                    NightModeOverlay(scope: model.settingScope)
                         .allowsHitTesting(false)
                 }
                 pageNumberOverlay
@@ -234,7 +251,7 @@ struct ReaderView: View {
         VStack {
             Spacer()
             HStack {
-                if AppData.shared.settings["showPageNumberInReader"].boolValue ?? true {
+                if model.setting("showPageNumberInReader").boolValue ?? true {
                     Text(verbatim: "\(model.currentPageNumber)/\(model.totalPages)")
                         .font(.caption.monospacedDigit())
                         .padding(6)
@@ -348,6 +365,11 @@ struct ReaderView: View {
                 } label: {
                     Label("Reload".tl, systemImage: "arrow.clockwise")
                 }
+                Button {
+                    showReadingSettings = true
+                } label: {
+                    Label("Reading settings".tl, systemImage: "gearshape")
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .frame(minWidth: 36, minHeight: 36)
@@ -430,8 +452,10 @@ struct ReaderView: View {
 
 /// 夜间模式：反色 + 变暗（对齐原版 readerNightMode 的暖色遮罩语义）。
 struct NightModeOverlay: View {
+    var scope: ReaderSettingScope = .global
+
     private var tint: Color {
-        let colorName = AppData.shared.settings["readerNightModeColor"].stringValue ?? "warm"
+        let colorName = scope.effective("readerNightModeColor").stringValue ?? "warm"
         switch colorName {
         case "black": return .black
         case "red": return Color(red: 0.4, green: 0.1, blue: 0.05)
@@ -440,7 +464,7 @@ struct NightModeOverlay: View {
     }
 
     var body: some View {
-        let intensity = AppData.shared.settings["readerNightModeIntensity"].doubleValue ?? 0.45
+        let intensity = scope.effective("readerNightModeIntensity").doubleValue ?? 0.45
         tint.opacity(max(intensity, 0.1) * 0.85)
             .ignoresSafeArea()
             .blendMode(.multiply)
