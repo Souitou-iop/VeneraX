@@ -29,7 +29,10 @@ struct FollowUpdatesView: View {
                         Button {
                             checkUpdates()
                         } label: {
+                            // borderedProminent 在深色主题下会把符号渲染成强调色，
+                            // 压在同色底上不可见；固定白色保证对比度。
                             Label("Check Now".tl, systemImage: "arrow.clockwise")
+                                .foregroundStyle(.white)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)

@@ -245,3 +245,7 @@ com.apple.DocumentManager.Service [TAP] Couldn't get FPItem from node for
 - HTTP Basic Auth 源的真实网络请求往返（构造逻辑已有单测）。
 - 实时活动真机验收（DEVELOPMENT_TEAM 未配置）。
 - 模拟器保持 Booted（按用户要求，未关闭）。
+
+### 2026-09-05 补丁：「立即检查」按钮图标对比度修复
+
+- 追更页「立即检查」（borderedProminent）在深色主题下符号被渲染成强调色压在同色底上不可见；Label 固定 `.foregroundStyle(.white)`。已重新构建安装并截图验证：图标与文字均为白色。
