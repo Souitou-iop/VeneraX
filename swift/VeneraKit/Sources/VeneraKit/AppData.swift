@@ -49,7 +49,7 @@ public final class AppData: @unchecked Sendable {
             appData.withState { $0.settings }
         }
 
-        /// 每部漫画独立阅读设置（comicSpecificSettings 语义）。
+        /// 每部漫画/设备独立阅读设置的生效链：漫画级 → 设备级 → 全局（对齐上游 appdata.dart）。
         public func getReaderSetting(comicId: String, sourceKey: String, key: String) -> JSON {
             let composite = "\(comicId)@\(sourceKey)"
             let comicSettings = self["comicSpecificSettings"][composite]
@@ -59,15 +59,79 @@ public final class AppData: @unchecked Sendable {
                     return value
                 }
             }
-            return self[key]
+            return getDeviceReaderSetting(key: key)
         }
 
+        /// 写入漫画级设置值（只写值；enabled 开关由 UI 经 setComicSpecificSettingsEnabled 控制，对齐上游）。
         public func setReaderSetting(comicId: String, sourceKey: String, key: String, value: JSON) {
             let composite = "\(comicId)@\(sourceKey)"
             var comicSettings = self["comicSpecificSettings"][composite].objectValue ?? [:]
-            comicSettings["enabled"] = .bool(true)
             comicSettings[key] = value
-            self["comicSpecificSettings"] = .object([composite: .object(comicSettings)])
+            var all = self["comicSpecificSettings"].objectValue ?? [:]
+            all[composite] = .object(comicSettings)
+            self["comicSpecificSettings"] = .object(all)
+        }
+
+        public func isComicSpecificSettingsEnabled(comicId: String, sourceKey: String) -> Bool {
+            self["comicSpecificSettings"]["\(comicId)@\(sourceKey)"]["enabled"].boolValue == true
+        }
+
+        public func setComicSpecificSettingsEnabled(comicId: String, sourceKey: String, enabled: Bool) {
+            let composite = "\(comicId)@\(sourceKey)"
+            var comicSettings = self["comicSpecificSettings"][composite].objectValue ?? [:]
+            comicSettings["enabled"] = .bool(enabled)
+            var all = self["comicSpecificSettings"].objectValue ?? [:]
+            all[composite] = .object(comicSettings)
+            self["comicSpecificSettings"] = .object(all)
+        }
+
+        /// 清除某部漫画的全部独立设置（对齐上游 resetComicReaderSettings）。
+        public func resetComicReaderSettings(comicId: String, sourceKey: String) {
+            var all = self["comicSpecificSettings"].objectValue ?? [:]
+            all.removeValue(forKey: "\(comicId)@\(sourceKey)")
+            self["comicSpecificSettings"] = .object(all)
+        }
+
+        public func isDeviceSpecificSettingsEnabled() -> Bool {
+            let deviceId = self["deviceId"].stringValue ?? ""
+            guard !deviceId.isEmpty else { return false }
+            return self["deviceSpecificSettings"][deviceId]["enabled"].boolValue == true
+        }
+
+        public func getDeviceReaderSetting(key: String) -> JSON {
+            guard isDeviceSpecificSettingsEnabled() else { return self[key] }
+            let deviceId = self["deviceId"].stringValue ?? ""
+            let value = self["deviceSpecificSettings"][deviceId][key]
+            return value.isNull ? self[key] : value
+        }
+
+        /// 写入设备级设置值（只写值并懒创建 deviceId；enabled 开关由 UI 控制，对齐上游）。
+        public func setDeviceReaderSetting(key: String, value: JSON) {
+            let deviceId = getOrCreateDeviceId()
+            var all = self["deviceSpecificSettings"].objectValue ?? [:]
+            var deviceSettings = all[deviceId]?.objectValue ?? [:]
+            deviceSettings[key] = value
+            all[deviceId] = .object(deviceSettings)
+            self["deviceSpecificSettings"] = .object(all)
+        }
+
+        /// 清除本设备的独立阅读设置（保留 deviceId 本身，对齐上游 resetDeviceReaderSettings）。
+        public func resetDeviceReaderSettings() {
+            let deviceId = self["deviceId"].stringValue ?? ""
+            guard !deviceId.isEmpty else { return }
+            var all = self["deviceSpecificSettings"].objectValue ?? [:]
+            all.removeValue(forKey: deviceId)
+            self["deviceSpecificSettings"] = .object(all)
+        }
+
+        private func getOrCreateDeviceId() -> String {
+            let existing = self["deviceId"].stringValue ?? ""
+            if !existing.isEmpty {
+                return existing
+            }
+            let id = UUID().uuidString
+            self["deviceId"] = .string(id)
+            return id
         }
     }
 

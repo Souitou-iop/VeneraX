@@ -287,3 +287,28 @@ xcodebuild -project swift/VeneraX.xcodeproj -scheme VeneraX -sdk iphonesimulator
 
 - 本轮在独立 git worktree（`feature/aggregated-search` 分支）进行，未触碰主工作区与模拟器（当时模拟器正被另一线程做 UI 走查）；页内重搜、空态、More 跳转等 UI 交互留待合并后模拟器走查。
 - `swift test` 仅覆盖 VeneraKit；聚合页视图层（AggregatedSearchView）不在单测范围，编译由 App Debug 构建保障。
+
+## 2026-09-05（深夜）：上游 v2.2.11→v2.3.2 追赶审计 + 阅读设置作用域（并行分支 feature/reader-setting-scopes）
+
+### 上游追赶审计结论
+
+- 逐项对照 origin（Kyosee/VeneraX）v2.2.11→v2.3.2 的 21 个实质提交：绝大部分已移植或判定 N/A（详见 PARITY 历史注记）；`ae214a7b`（阅读器设置按生效模式门控）在 Swift 端经查证为更大缺口的表象——**Swift 端漫画级/设备级独立阅读设置整体缺失**：VeneraKit 仅有半套死 API（无调用方、缺设备级、缺生效链），App 端无阅读器内设置入口。
+
+### 本轮落地（存储层切片）
+
+- `AppData.SettingsProxy` 补齐上游 appdata.dart 语义：`isComicSpecificSettingsEnabled` / `setComicSpecificSettingsEnabled` / `resetComicReaderSettings`、`isDeviceSpecificSettingsEnabled` / `getDeviceReaderSetting` / `setDeviceReaderSetting`（懒创建 deviceId，UUID） / `resetDeviceReaderSettings`（保留 deviceId）；`getReaderSetting` 生效链修正为**漫画级 → 设备级 → 全局**；`setReaderSetting` 改为只写值（enabled 开关独立控制，对齐上游）。
+- **顺带修复既有数据覆盖 bug**：旧 `setReaderSetting` 以 `[composite: …]` 整体替换 `comicSpecificSettings`，写入第二部漫画会清空第一部的独立设置；改为按条目合并。
+- 复用既有默认键 `deviceId` / `deviceSpecificSettings` / `comicSpecificSettings`（deviceId 已在 disableSync，与 Flutter 对齐）；composite 键格式 `comicId@sourceKey` 与 Flutter 版互通。
+
+### 验证结果
+
+```text
+VeneraKit: 170 tests, 0 failures, 1 skipped（含新增 ReaderSettingScopeTests 9 项：生效链全路径、enabled 门控、deviceId 懒创建且稳定、多漫画写入互不覆盖、两类 reset 语义）
+swift test --disable-sandbox（worktree /Volumes/SanDisk/Projects/VeneraX-parallel，分支 feature/reader-setting-scopes @ b5a40aa2+）
+xcodebuild -scheme VeneraX -sdk iphonesimulator -derivedDataPath .../VeneraX-parallel → BUILD SUCCEEDED
+```
+
+### 边界说明
+
+- 本切片仅存储层 + 单测；UI（阅读器内「每部漫画独立设置」入口、设置页按生效模式门控 = 上游 ae214a7b 的完整对齐）为下一步工作，当前无调用方、不影响既有行为。
+- 上游 v2.3.2 仅 linked entries 改名重构，无可移植行为修复。
