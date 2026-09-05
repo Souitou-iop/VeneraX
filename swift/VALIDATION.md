@@ -249,3 +249,9 @@ com.apple.DocumentManager.Service [TAP] Couldn't get FPItem from node for
 ### 2026-09-05 补丁：「立即检查」按钮图标对比度修复
 
 - 追更页「立即检查」（borderedProminent）在深色主题下符号被渲染成强调色压在同色底上不可见；Label 固定 `.foregroundStyle(.white)`。已重新构建安装并截图验证：图标与文字均为白色。
+
+### 2026-09-05 补丁：追更页液态玻璃按钮与检查动画
+
+- 「立即检查」改为 iOS 26 原生液态玻璃按钮 `buttonStyle(.glass)`（iOS 18 回退 borderedProminent + 白色前景）。
+- 检查中不再用裸 ProgressView 整体替换按钮：按钮原位切换为旋转指示 + 「检查中」并禁用，头卡布局不跳动；`reload()` 与检查状态切换包进 `withAnimation`，消除更新卡片闪烁。
+- 模拟器验证（iOS 26.5）：按钮呈半透明玻璃胶囊、强调色图标清晰；点击后任务创建/完成、按钮状态回弹正常（本库 17 部收藏漫画因源 key 无法解析瞬间失败，属导入数据依赖）。

@@ -21,22 +21,10 @@ struct FollowUpdatesView: View {
                         Text(isChecking ? progressText : "\(updatedComics.count) updated comics".tl)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .contentTransition(.numericText())
                     }
                     Spacer()
-                    if isChecking {
-                        ProgressView()
-                    } else {
-                        Button {
-                            checkUpdates()
-                        } label: {
-                            // borderedProminent 在深色主题下会把符号渲染成强调色，
-                            // 压在同色底上不可见；固定白色保证对比度。
-                            Label("Check Now".tl, systemImage: "arrow.clockwise")
-                                .foregroundStyle(.white)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
+                    checkButton
                 }
                 .padding(.vertical, 4)
             }
@@ -147,7 +135,9 @@ struct FollowUpdatesView: View {
     }
 
     private func reload() {
-        updatedComics = FollowUpdatesManager.shared.getAllUpdatedComics()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            updatedComics = FollowUpdatesManager.shared.getAllUpdatedComics()
+        }
     }
 
     private func checkUpdates() {
@@ -158,15 +148,52 @@ struct FollowUpdatesView: View {
         }
         guard checkTask == nil else { return }
         checkTask = Task { @MainActor in
-            isChecking = true
-            progressText = "Checking updates...".tl
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isChecking = true
+                progressText = "Checking updates...".tl
+            }
             defer {
-                isChecking = false
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isChecking = false
+                }
                 checkTask = nil
             }
             await FollowUpdatesManager.shared.checkAllFolders(force: true)
             guard !Task.isCancelled else { return }
             reload()
+        }
+    }
+
+    /// 检查按钮：iOS 26 用原生液态玻璃样式；检查中按钮原位变为旋转指示，
+    /// 不做整体替换，避免头卡布局跳动。iOS 18 回退 borderedProminent
+    /// （该样式会把符号染成强调色，须固定白色保证对比度）。
+    @ViewBuilder
+    private var checkButton: some View {
+        let label = HStack(spacing: 6) {
+            if isChecking {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
+            Text(isChecking ? "Checking...".tl : "Check Now".tl)
+        }
+        .contentTransition(.opacity)
+        if #available(iOS 26.0, *) {
+            Button {
+                checkUpdates()
+            } label: { label }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(isChecking)
+        } else {
+            Button {
+                checkUpdates()
+            } label: {
+                label.foregroundStyle(.white)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(isChecking)
         }
     }
 }
